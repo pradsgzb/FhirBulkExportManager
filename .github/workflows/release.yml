@@ -66,7 +66,7 @@ jobs:
           Get-FileHash artifacts/EnterpriseFhirBulkExportManager.msix -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  EnterpriseFhirBulkExportManager.msix" } | Set-Content artifacts/checksums.sha256 -Encoding ascii
 
       - name: Upload qualified artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: EnterpriseFhirBulkExportManager-${{ github.ref_name }}
           path: |
