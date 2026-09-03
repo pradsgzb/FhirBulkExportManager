@@ -1,7 +1,8 @@
 <Window x:Class="FhirBulkExportManager.App.Wpf.JobDetailWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Export Job Details" Height="760" Width="1180" MinHeight="600" MinWidth="900" WindowStartupLocation="CenterOwner">
+        Title="Export Job Details" Height="760" Width="1180" MinHeight="600" MinWidth="900" WindowStartupLocation="CenterOwner"
+        Icon="pack://application:,,,/Assets/AppIcon.ico">
     <Grid Margin="14">
         <Grid.RowDefinitions><RowDefinition Height="Auto" /><RowDefinition Height="*" /><RowDefinition Height="Auto" /></Grid.RowDefinitions>
         <StackPanel Margin="4,0,4,12">
@@ -77,4 +78,3 @@
         <Button Grid.Row="2" Content="Close" IsCancel="True" HorizontalAlignment="Right" Margin="0,10,0,0" MinWidth="90" />
     </Grid>
 </Window>
-
