@@ -12,8 +12,8 @@ public partial class MainWindow : Window
 
     public MainWindow(MainViewModel viewModel)
     {
-        InitializeComponent();
         ViewModel = viewModel;
+        InitializeComponent();
         DataContext = viewModel;
         trayIcon = new Forms.NotifyIcon
         {
@@ -21,6 +21,7 @@ public partial class MainWindow : Window
             Text = "Enterprise FHIR Bulk Export Manager",
             Visible = false,
         };
+        ViewModel.PropertyChanged += OnViewModelPropertyChanged;
         trayIcon.DoubleClick += (_, _) => RestoreFromTray();
         StateChanged += (_, _) =>
         {
@@ -31,7 +32,11 @@ public partial class MainWindow : Window
             }
         };
         Closing += OnClosing;
-        Closed += (_, _) => trayIcon.Dispose();
+        Closed += (_, _) =>
+        {
+            ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            trayIcon.Dispose();
+        };
     }
 
     public MainViewModel ViewModel { get; }
@@ -41,6 +46,16 @@ public partial class MainWindow : Window
         if (sender is PasswordBox box)
         {
             ViewModel.SetPassword(box.Password);
+        }
+    }
+
+    private void OnViewModelPropertyChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(MainViewModel.ConnectionClientSecret) &&
+            string.IsNullOrEmpty(ViewModel.ConnectionClientSecret) &&
+            ClientSecretBox.Password.Length > 0)
+        {
+            ClientSecretBox.Clear();
         }
     }
 

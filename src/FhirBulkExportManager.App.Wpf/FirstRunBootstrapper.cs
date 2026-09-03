@@ -39,8 +39,11 @@ public sealed class FirstRunBootstrapper(
 
         foreach (var server in PublicTestServers)
         {
-            var vendor = await EnsurePublicVendorAsync(vendors, server, cancellationToken).ConfigureAwait(false);
-            await EnsureAnonymousConnectionAsync(vendor, server, cancellationToken).ConfigureAwait(false);
+            var (vendor, vendorCreated) = await EnsurePublicVendorAsync(vendors, server, cancellationToken).ConfigureAwait(false);
+            if (vendorCreated)
+            {
+                await EnsureAnonymousConnectionAsync(vendor, server, cancellationToken).ConfigureAwait(false);
+            }
         }
     }
 
@@ -57,7 +60,7 @@ public sealed class FirstRunBootstrapper(
         vendors.Add(vendor);
     }
 
-    private async Task<Vendor> EnsurePublicVendorAsync(
+    private async Task<(Vendor Vendor, bool Created)> EnsurePublicVendorAsync(
         List<Vendor> vendors,
         PublicTestServerDefinition server,
         CancellationToken cancellationToken)
@@ -71,14 +74,14 @@ public sealed class FirstRunBootstrapper(
                 throw new InvalidOperationException($"The built-in vendor name '{server.VendorName}' is already assigned to a different plugin. Rename that vendor before restarting.");
             }
 
-            return existing;
+            return (existing, false);
         }
 
         var now = timeProvider.GetUtcNow();
         var vendor = new Vendor(Guid.NewGuid(), server.VendorName, PublicFhirR4PluginId, BuiltInPluginVersion, now);
         await configurationStore.AddVendorAsync(vendor, Audit(now, "VendorCreated", nameof(Vendor), vendor.Id), cancellationToken).ConfigureAwait(false);
         vendors.Add(vendor);
-        return vendor;
+        return (vendor, true);
     }
 
     private async Task EnsureAnonymousConnectionAsync(

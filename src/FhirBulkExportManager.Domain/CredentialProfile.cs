@@ -51,4 +51,29 @@ public sealed class CredentialProfile
     public string AdditionalConfigurationJson { get; private set; } = "{}";
     public DateTimeOffset CreatedAtUtc { get; private set; }
     public DateTimeOffset UpdatedAtUtc { get; private set; }
+
+    public void Update(
+        string name,
+        string authenticationType,
+        string? clientId,
+        string? secretReference,
+        string? tokenEndpoint,
+        DateTimeOffset now,
+        string? scope = null,
+        string? audience = null,
+        string? assertionEndpoint = null,
+        string additionalConfigurationJson = "{}")
+    {
+        Name = Guard.NotNullOrWhiteSpace(name, nameof(name));
+        AuthenticationType = Guard.NotNullOrWhiteSpace(authenticationType, nameof(authenticationType));
+        var anonymous = string.Equals(AuthenticationType, "None", StringComparison.OrdinalIgnoreCase);
+        ClientId = anonymous ? clientId?.Trim() ?? string.Empty : Guard.NotNullOrWhiteSpace(clientId, nameof(clientId));
+        SecretReference = anonymous ? string.Empty : secretReference?.Trim() ?? string.Empty;
+        TokenEndpoint = anonymous ? tokenEndpoint?.Trim() ?? string.Empty : Guard.NotNullOrWhiteSpace(tokenEndpoint, nameof(tokenEndpoint));
+        Scope = scope?.Trim();
+        Audience = audience?.Trim();
+        AssertionEndpoint = assertionEndpoint?.Trim();
+        AdditionalConfigurationJson = string.IsNullOrWhiteSpace(additionalConfigurationJson) ? "{}" : additionalConfigurationJson;
+        UpdatedAtUtc = now;
+    }
 }

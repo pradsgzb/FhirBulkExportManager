@@ -43,5 +43,27 @@ public sealed class Site
     public bool Enabled { get; private set; }
     public DateTimeOffset CreatedAtUtc { get; private set; }
     public DateTimeOffset UpdatedAtUtc { get; private set; }
-}
 
+    public void Update(
+        string name,
+        Uri fhirBaseUrl,
+        Guid credentialProfileId,
+        DateTimeOffset now,
+        string? description = null,
+        string? tenantIdentifier = null,
+        string? practiceCode = null)
+    {
+        if (!fhirBaseUrl.IsAbsoluteUri)
+        {
+            throw new ArgumentException("FHIR base URL must be absolute.", nameof(fhirBaseUrl));
+        }
+
+        Name = Guard.NotNullOrWhiteSpace(name, nameof(name));
+        FhirBaseUrl = fhirBaseUrl.AbsoluteUri.TrimEnd('/');
+        CredentialProfileId = credentialProfileId;
+        Description = description?.Trim();
+        TenantIdentifier = tenantIdentifier?.Trim();
+        PracticeCode = practiceCode?.Trim();
+        UpdatedAtUtc = now;
+    }
+}

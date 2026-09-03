@@ -170,6 +170,78 @@ public sealed class SqliteLifecycleTests : IDisposable
         Assert.Null(await store.GetJobByRemoteStatusUrlAsync(exact + "-different", CancellationToken.None));
     }
 
+    [Fact]
+    public async Task Connection_can_be_updated_and_deleted_transactionally_when_unused()
+    {
+        var factory = await CreateInitializedFactoryAsync();
+        var now = DateTimeOffset.Parse("2026-09-03T03:00:00Z");
+        var configuration = await SeedConfigurationAsync(factory, now);
+        var store = new SqliteConfigurationStore(factory);
+        var site = await store.GetSiteAsync(configuration.SiteId, CancellationToken.None);
+        var credential = await store.GetCredentialProfileAsync(configuration.CredentialProfileId, CancellationToken.None);
+        Assert.NotNull(site);
+        Assert.NotNull(credential);
+        var updatedAt = now.AddMinutes(10);
+        site.Update("Updated Site", new Uri("https://updated.example/fhir"), credential.Id, updatedAt);
+        credential.Update(
+            "Updated Credential",
+            "client_credentials",
+            "updated-client",
+            "updated-secret-reference",
+            "https://updated.example/token",
+            updatedAt,
+            "system/*.read");
+
+        await store.UpdateConnectionAsync(
+            site,
+            credential,
+            Audit(updatedAt, "ConnectionUpdated", site.Id),
+            CancellationToken.None);
+
+        var reloadedSite = await store.GetSiteAsync(site.Id, CancellationToken.None);
+        var reloadedCredential = await store.GetCredentialProfileAsync(credential.Id, CancellationToken.None);
+        Assert.NotNull(reloadedSite);
+        Assert.NotNull(reloadedCredential);
+        Assert.Equal("Updated Site", reloadedSite.Name);
+        Assert.Equal("https://updated.example/fhir", reloadedSite.FhirBaseUrl);
+        Assert.Equal("updated-client", reloadedCredential.ClientId);
+
+        var deleted = await store.DeleteConnectionAsync(
+            site.Id,
+            credential.Id,
+            Audit(updatedAt.AddMinutes(1), "ConnectionDeleted", site.Id),
+            CancellationToken.None);
+
+        Assert.True(deleted.CredentialDeleted);
+        Assert.Null(await store.GetSiteAsync(site.Id, CancellationToken.None));
+        Assert.Null(await store.GetCredentialProfileAsync(credential.Id, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Connection_delete_is_blocked_when_a_job_references_the_site()
+    {
+        var factory = await CreateInitializedFactoryAsync();
+        var now = DateTimeOffset.Parse("2026-09-03T03:00:00Z");
+        var configuration = await SeedConfigurationAsync(factory, now);
+        var job = CreateJob("Connection reference", configuration, now);
+        await using (var context = await factory.CreateDbContextAsync())
+        {
+            context.ExportJobs.Add(job);
+            await context.SaveChangesAsync();
+        }
+
+        var store = new SqliteConfigurationStore(factory);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => store.DeleteConnectionAsync(
+            configuration.SiteId,
+            configuration.CredentialProfileId,
+            Audit(now.AddMinutes(1), "ConnectionDeleted", configuration.SiteId),
+            CancellationToken.None));
+
+        Assert.Contains("export jobs reference it", exception.Message, StringComparison.Ordinal);
+        Assert.NotNull(await store.GetSiteAsync(configuration.SiteId, CancellationToken.None));
+        Assert.NotNull(await store.GetCredentialProfileAsync(configuration.CredentialProfileId, CancellationToken.None));
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();
@@ -247,4 +319,7 @@ public sealed class SqliteLifecycleTests : IDisposable
             JobPriority.Normal,
             Path.GetTempPath(),
             createdAtUtc);
+
+    private static AuditEvent Audit(DateTimeOffset now, string action, Guid entityId) =>
+        new(now, "TEST\\operator", action, "Connection", entityId.ToString("D"), "Succeeded", Guid.NewGuid().ToString("N"));
 }

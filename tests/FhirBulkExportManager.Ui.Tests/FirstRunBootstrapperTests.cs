@@ -46,6 +46,28 @@ public sealed class FirstRunBootstrapperTests
         });
     }
 
+    [Fact]
+    public async Task Deleted_built_in_connection_is_not_recreated_on_restart()
+    {
+        var store = new InMemoryConfigurationStore();
+        var bootstrapper = new FhirBulkExportManager.App.Wpf.FirstRunBootstrapper(
+            store,
+            new TestIdentityProvider(),
+            TimeProvider.System);
+        await bootstrapper.InitializeAsync(CancellationToken.None);
+        var hapiVendor = Assert.Single(
+            store.Vendors,
+            vendor => vendor.Name.StartsWith("HAPI Test Server (R4 FHIR)", StringComparison.Ordinal));
+        var hapiSite = Assert.Single(store.Sites, site => site.VendorId == hapiVendor.Id);
+        var hapiCredential = Assert.Single(store.Credentials, credential => credential.Id == hapiSite.CredentialProfileId);
+        store.Sites.Remove(hapiSite);
+        store.Credentials.Remove(hapiCredential);
+
+        await bootstrapper.InitializeAsync(CancellationToken.None);
+
+        Assert.DoesNotContain(store.Sites, site => site.VendorId == hapiVendor.Id);
+    }
+
     private sealed class TestIdentityProvider : IWindowsIdentityProvider
     {
         public string GetCurrentIdentity() => "TEST\\operator";
@@ -80,6 +102,29 @@ public sealed class FirstRunBootstrapperTests
         {
             Sites.Add(site);
             return Task.CompletedTask;
+        }
+
+        public Task AddConnectionAsync(Site site, CredentialProfile credentialProfile, AuditEvent auditEvent, CancellationToken cancellationToken)
+        {
+            Credentials.Add(credentialProfile);
+            Sites.Add(site);
+            return Task.CompletedTask;
+        }
+
+        public Task UpdateConnectionAsync(Site site, CredentialProfile credentialProfile, AuditEvent auditEvent, CancellationToken cancellationToken) =>
+            Task.CompletedTask;
+
+        public Task<ConnectionDeleteResult> DeleteConnectionAsync(Guid siteId, Guid credentialProfileId, AuditEvent auditEvent, CancellationToken cancellationToken)
+        {
+            var site = Sites.Single(x => x.Id == siteId);
+            Sites.Remove(site);
+            var credentialDeleted = Sites.All(x => x.CredentialProfileId != credentialProfileId);
+            if (credentialDeleted)
+            {
+                Credentials.RemoveAll(x => x.Id == credentialProfileId);
+            }
+
+            return Task.FromResult(new ConnectionDeleteResult(credentialDeleted));
         }
 
         public Task<CredentialProfile?> GetCredentialProfileAsync(Guid id, CancellationToken cancellationToken) =>

@@ -10,6 +10,7 @@ using FhirBulkExportManager.Application.Services;
 using FhirBulkExportManager.Domain;
 using FhirBulkExportManager.PluginContracts;
 using FhirBulkExportManager.Shared;
+using FhirBulkExportManager.Worker;
 using Microsoft.Extensions.Options;
 
 namespace FhirBulkExportManager.App.Wpf;
@@ -21,6 +22,7 @@ public sealed class MainViewModel : ObservableObject
     private readonly ISecretStore secretStore;
     private readonly IWindowsIdentityProvider identityProvider;
     private readonly IVendorPluginCatalog pluginCatalog;
+    private readonly AuthenticationTokenProvider tokenProvider;
     private readonly IManagedStorage storage;
     private readonly ILocalCommitService commitService;
     private readonly IUserDialogService dialogs;
@@ -67,11 +69,15 @@ public sealed class MainViewModel : ObservableObject
     private string connectionFhirBaseUrl = string.Empty;
     private string connectionClientId = string.Empty;
     private string connectionClientSecret = string.Empty;
+    private bool connectionRemoveStoredSecret;
     private string connectionTokenEndpoint = string.Empty;
     private string connectionAssertionEndpoint = string.Empty;
     private string connectionScope = string.Empty;
     private string connectionAudience = string.Empty;
     private string connectionAuthConfigurationJson = "{}";
+    private Guid? editingConnectionSiteId;
+    private Guid? editingCredentialProfileId;
+    private string editingOriginalSecretReference = string.Empty;
 
     public MainViewModel(
         ExportJobService jobService,
@@ -79,6 +85,7 @@ public sealed class MainViewModel : ObservableObject
         ISecretStore secretStore,
         IWindowsIdentityProvider identityProvider,
         IVendorPluginCatalog pluginCatalog,
+        AuthenticationTokenProvider tokenProvider,
         IManagedStorage storage,
         ILocalCommitService commitService,
         IUserDialogService dialogs,
@@ -92,6 +99,7 @@ public sealed class MainViewModel : ObservableObject
         this.secretStore = secretStore;
         this.identityProvider = identityProvider;
         this.pluginCatalog = pluginCatalog;
+        this.tokenProvider = tokenProvider;
         this.storage = storage;
         this.commitService = commitService;
         this.dialogs = dialogs;
@@ -120,6 +128,9 @@ public sealed class MainViewModel : ObservableObject
         OpenFolderCommand = new AsyncRelayCommand(() => RunAsync(OpenFolderAsync), () => SelectedJob is not null);
         DetailsCommand = new AsyncRelayCommand(() => RunAsync(ShowDetailsAsync), () => SelectedJob is not null);
         SaveConnectionCommand = new AsyncRelayCommand(() => RunAsync(SaveConnectionAsync), () => SelectedConnectionVendor is not null);
+        EditConnectionCommand = new AsyncRelayCommand(() => RunAsync(EditSelectedConnectionAsync), () => SelectedConnectionSite is not null);
+        DeleteConnectionCommand = new AsyncRelayCommand(() => RunAsync(DeleteSelectedConnectionAsync), () => SelectedConnectionSite is not null);
+        NewConnectionCommand = new AsyncRelayCommand(() => RunAsync(ResetConnectionEditorAsync));
         TestConnectionCommand = new AsyncRelayCommand(() => RunAsync(TestConnectionAsync), () => SelectedConnectionSite is not null);
     }
 
@@ -148,6 +159,9 @@ public sealed class MainViewModel : ObservableObject
     public ICommand OpenFolderCommand { get; }
     public ICommand DetailsCommand { get; }
     public ICommand SaveConnectionCommand { get; }
+    public ICommand EditConnectionCommand { get; }
+    public ICommand DeleteConnectionCommand { get; }
+    public ICommand NewConnectionCommand { get; }
     public ICommand TestConnectionCommand { get; }
 
     public int ConfiguredExportLimit { get; }
@@ -264,11 +278,16 @@ public sealed class MainViewModel : ObservableObject
     public string ConnectionFhirBaseUrl { get => connectionFhirBaseUrl; set => SetProperty(ref connectionFhirBaseUrl, value); }
     public string ConnectionClientId { get => connectionClientId; set => SetProperty(ref connectionClientId, value); }
     public string ConnectionClientSecret { get => connectionClientSecret; set => SetProperty(ref connectionClientSecret, value); }
+    public bool ConnectionRemoveStoredSecret { get => connectionRemoveStoredSecret; set => SetProperty(ref connectionRemoveStoredSecret, value); }
     public string ConnectionTokenEndpoint { get => connectionTokenEndpoint; set => SetProperty(ref connectionTokenEndpoint, value); }
     public string ConnectionAssertionEndpoint { get => connectionAssertionEndpoint; set => SetProperty(ref connectionAssertionEndpoint, value); }
     public string ConnectionScope { get => connectionScope; set => SetProperty(ref connectionScope, value); }
     public string ConnectionAudience { get => connectionAudience; set => SetProperty(ref connectionAudience, value); }
     public string ConnectionAuthConfigurationJson { get => connectionAuthConfigurationJson; set => SetProperty(ref connectionAuthConfigurationJson, value); }
+    public bool IsEditingConnection => editingConnectionSiteId is not null;
+    public bool CanChangeConnectionVendor => !IsEditingConnection;
+    public string ConnectionEditorTitle => IsEditingConnection ? "Edit Selected Connection" : "Create New Connection";
+    public string ConnectionSaveButtonText => IsEditingConnection ? "Save Connection Changes" : "Create Connection";
 
     public int DraftCount => Jobs.Count(x => x.State == ExportJobState.Draft);
     public int ActiveCount => Jobs.Count(x => !x.IsTerminal && x.State is not ExportJobState.Draft and not ExportJobState.Paused and not ExportJobState.HeldForReview and not ExportJobState.Unknown);
@@ -284,21 +303,33 @@ public sealed class MainViewModel : ObservableObject
 
     private async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
+        var selectedVendorId = SelectedVendor?.Id;
+        var selectedSiteId = SelectedSite?.Id;
+        var selectedCredentialId = SelectedCredential?.Id;
+        var selectedImportVendorId = SelectedImportVendor?.Id;
+        var selectedImportSiteId = SelectedImportSite?.Id;
+        var selectedImportCredentialId = SelectedImportCredential?.Id;
+        var selectedConnectionVendorId = SelectedConnectionVendor?.Id;
+        var selectedConnectionSiteId = SelectedConnectionSite?.Id;
         var vendors = await configurationStore.GetVendorsAsync(enabledOnly: true, cancellationToken).ConfigureAwait(true);
         var sites = await configurationStore.GetSitesAsync(vendorId: null, enabledOnly: true, cancellationToken: cancellationToken).ConfigureAwait(true);
         var credentials = await configurationStore.GetCredentialProfilesAsync(vendorId: null, cancellationToken: cancellationToken).ConfigureAwait(true);
         Replace(Vendors, vendors);
         Replace(Sites, sites);
         Replace(Credentials, credentials);
-        SelectedVendor ??= Vendors.FirstOrDefault();
-        SelectedSite ??= Sites.FirstOrDefault();
-        SelectedCredential ??= Credentials.FirstOrDefault();
-        SelectedImportVendor ??= Vendors.FirstOrDefault();
-        SelectedImportSite ??= Sites.FirstOrDefault(x => x.VendorId == SelectedImportVendor?.Id);
-        SelectedImportCredential ??= Credentials.FirstOrDefault(x => x.Id == SelectedImportSite?.CredentialProfileId)
+        SelectedVendor = Vendors.FirstOrDefault(x => x.Id == selectedVendorId) ?? Vendors.FirstOrDefault();
+        SelectedSite = Sites.FirstOrDefault(x => x.Id == selectedSiteId)
+            ?? Sites.FirstOrDefault(x => x.VendorId == SelectedVendor?.Id);
+        SelectedCredential = Credentials.FirstOrDefault(x => x.Id == selectedCredentialId)
+            ?? Credentials.FirstOrDefault(x => x.VendorId == SelectedVendor?.Id);
+        SelectedImportVendor = Vendors.FirstOrDefault(x => x.Id == selectedImportVendorId) ?? Vendors.FirstOrDefault();
+        SelectedImportSite = Sites.FirstOrDefault(x => x.Id == selectedImportSiteId)
+            ?? Sites.FirstOrDefault(x => x.VendorId == SelectedImportVendor?.Id);
+        SelectedImportCredential = Credentials.FirstOrDefault(x => x.Id == selectedImportCredentialId)
+            ?? Credentials.FirstOrDefault(x => x.Id == SelectedImportSite?.CredentialProfileId)
             ?? Credentials.FirstOrDefault(x => x.VendorId == SelectedImportVendor?.Id);
-        SelectedConnectionVendor ??= Vendors.FirstOrDefault();
-        SelectedConnectionSite ??= Sites.FirstOrDefault();
+        SelectedConnectionVendor = Vendors.FirstOrDefault(x => x.Id == selectedConnectionVendorId) ?? Vendors.FirstOrDefault();
+        SelectedConnectionSite = Sites.FirstOrDefault(x => x.Id == selectedConnectionSiteId) ?? Sites.FirstOrDefault();
         await RefreshJobsAsync(cancellationToken).ConfigureAwait(true);
     }
 
@@ -554,6 +585,24 @@ public sealed class MainViewModel : ObservableObject
         var vendor = SelectedConnectionVendor ?? throw new InvalidOperationException("Select a vendor.");
         var anonymous = string.Equals(vendor.PluginId, FirstRunBootstrapper.PublicFhirR4PluginId, StringComparison.Ordinal);
         var fhirUri = Guard.AbsoluteHttpsUri(ConnectionFhirBaseUrl, nameof(ConnectionFhirBaseUrl));
+        Site? existingSite = null;
+        CredentialProfile? existingCredential = null;
+        if (editingConnectionSiteId is { } siteId && editingCredentialProfileId is { } credentialProfileId)
+        {
+            existingSite = await configurationStore.GetSiteAsync(siteId, CancellationToken.None).ConfigureAwait(true)
+                ?? throw new InvalidOperationException("The connection no longer exists. Refresh and try again.");
+            existingCredential = await configurationStore.GetCredentialProfileAsync(credentialProfileId, CancellationToken.None).ConfigureAwait(true)
+                ?? throw new InvalidOperationException("The connection credential profile no longer exists.");
+            if (existingSite.VendorId != vendor.Id || existingCredential.VendorId != vendor.Id)
+            {
+                throw new InvalidOperationException("A connection cannot be moved to another vendor. Create a new connection for the other vendor.");
+            }
+        }
+
+        using (JsonDocument.Parse(string.IsNullOrWhiteSpace(ConnectionAuthConfigurationJson) ? "{}" : ConnectionAuthConfigurationJson))
+        {
+        }
+
         if (!anonymous)
         {
             _ = Guard.AbsoluteHttpsUri(ConnectionTokenEndpoint, nameof(ConnectionTokenEndpoint));
@@ -561,48 +610,222 @@ public sealed class MainViewModel : ObservableObject
             {
                 _ = Guard.AbsoluteHttpsUri(ConnectionAssertionEndpoint, nameof(ConnectionAssertionEndpoint));
             }
-
-            using (JsonDocument.Parse(string.IsNullOrWhiteSpace(ConnectionAuthConfigurationJson) ? "{}" : ConnectionAuthConfigurationJson))
-            {
-            }
-            if (string.IsNullOrWhiteSpace(ConnectionClientSecret) && string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint))
-            {
-                throw new InvalidOperationException("Configure a HealthWizz assertion endpoint or provide a client secret for direct OAuth client credentials.");
-            }
         }
 
         var now = timeProvider.GetUtcNow();
-        var secretReference = string.Empty;
+        var retainedSecretReference = existingCredential is null || ConnectionRemoveStoredSecret
+            ? string.Empty
+            : existingCredential.SecretReference;
+        var newSecretReference = string.Empty;
         if (!anonymous && !string.IsNullOrWhiteSpace(ConnectionClientSecret))
         {
-            secretReference = await secretStore.SaveAsync("oauth-client-secret", ConnectionClientSecret.AsMemory(), CancellationToken.None).ConfigureAwait(true);
+            newSecretReference = await secretStore.SaveAsync("oauth-client-secret", ConnectionClientSecret.AsMemory(), CancellationToken.None).ConfigureAwait(true);
         }
 
+        var secretReference = anonymous
+            ? string.Empty
+            : string.IsNullOrWhiteSpace(newSecretReference) ? retainedSecretReference : newSecretReference;
+        if (!anonymous && string.IsNullOrWhiteSpace(secretReference) && string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint))
+        {
+            if (!string.IsNullOrWhiteSpace(newSecretReference))
+            {
+                await secretStore.DeleteAsync(newSecretReference, CancellationToken.None).ConfigureAwait(true);
+            }
+
+            throw new InvalidOperationException("Configure a HealthWizz assertion endpoint or provide a client secret for direct OAuth client credentials.");
+        }
+
+        var persistenceSucceeded = false;
         try
         {
-            var profile = new CredentialProfile(
-                Guid.NewGuid(), vendor.Id, ConnectionSiteName + (anonymous ? " Anonymous" : " OAuth"), anonymous ? "None" : "OAuth2ClientCredentials",
-                anonymous ? null : ConnectionClientId, secretReference, anonymous ? null : ConnectionTokenEndpoint, now,
-                anonymous ? null : ConnectionScope, anonymous ? null : ConnectionAudience,
-                anonymous || string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint) ? null : ConnectionAssertionEndpoint,
-                anonymous || string.IsNullOrWhiteSpace(ConnectionAuthConfigurationJson) ? "{}" : ConnectionAuthConfigurationJson);
             var correlation = Guid.NewGuid().ToString("N");
-            await configurationStore.AddCredentialProfileAsync(profile, Audit("CredentialProfileCreated", profile.Id, correlation), CancellationToken.None).ConfigureAwait(true);
-            var site = new Site(Guid.NewGuid(), vendor.Id, ConnectionSiteName, fhirUri, profile.Id, now);
-            await configurationStore.AddSiteAsync(site, Audit("SiteCreated", site.Id, correlation), CancellationToken.None).ConfigureAwait(true);
+            Site savedSite;
+            CredentialProfile savedCredential;
+            if (existingSite is not null && existingCredential is not null)
+            {
+                existingCredential.Update(
+                    ConnectionSiteName + (anonymous ? " Anonymous" : " OAuth"),
+                    anonymous ? "None" : "OAuth2ClientCredentials",
+                    anonymous ? null : ConnectionClientId,
+                    secretReference,
+                    anonymous ? null : ConnectionTokenEndpoint,
+                    now,
+                    anonymous ? null : ConnectionScope,
+                    anonymous ? null : ConnectionAudience,
+                    anonymous || string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint) ? null : ConnectionAssertionEndpoint,
+                    anonymous || string.IsNullOrWhiteSpace(ConnectionAuthConfigurationJson) ? "{}" : ConnectionAuthConfigurationJson);
+                existingSite.Update(
+                    ConnectionSiteName,
+                    fhirUri,
+                    existingCredential.Id,
+                    now,
+                    existingSite.Description,
+                    existingSite.TenantIdentifier,
+                    existingSite.PracticeCode);
+                await configurationStore.UpdateConnectionAsync(
+                    existingSite,
+                    existingCredential,
+                    Audit("ConnectionUpdated", existingSite.Id, correlation),
+                    CancellationToken.None).ConfigureAwait(true);
+                savedSite = existingSite;
+                savedCredential = existingCredential;
+            }
+            else
+            {
+                savedCredential = new CredentialProfile(
+                    Guid.NewGuid(), vendor.Id, ConnectionSiteName + (anonymous ? " Anonymous" : " OAuth"), anonymous ? "None" : "OAuth2ClientCredentials",
+                    anonymous ? null : ConnectionClientId, secretReference, anonymous ? null : ConnectionTokenEndpoint, now,
+                    anonymous ? null : ConnectionScope, anonymous ? null : ConnectionAudience,
+                    anonymous || string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint) ? null : ConnectionAssertionEndpoint,
+                    anonymous || string.IsNullOrWhiteSpace(ConnectionAuthConfigurationJson) ? "{}" : ConnectionAuthConfigurationJson);
+                savedSite = new Site(Guid.NewGuid(), vendor.Id, ConnectionSiteName, fhirUri, savedCredential.Id, now);
+                await configurationStore.AddConnectionAsync(
+                    savedSite,
+                    savedCredential,
+                    Audit("ConnectionCreated", savedSite.Id, correlation),
+                    CancellationToken.None).ConfigureAwait(true);
+            }
+
+            persistenceSucceeded = true;
+            tokenProvider.Invalidate(savedCredential.Id);
             ConnectionClientSecret = string.Empty;
-            StatusMessage = "Connection profile saved. Use Test Connection before creating an export.";
+            ConnectionRemoveStoredSecret = false;
+            if (!string.IsNullOrWhiteSpace(editingOriginalSecretReference) &&
+                !string.Equals(editingOriginalSecretReference, secretReference, StringComparison.Ordinal))
+            {
+                await DeleteRetiredSecretWithWarningAsync(editingOriginalSecretReference, "Connection changes were saved").ConfigureAwait(true);
+            }
+
+            ResetConnectionEditor();
             await RefreshAsync().ConfigureAwait(true);
-            SelectedConnectionSite = Sites.FirstOrDefault(x => x.Id == site.Id);
+            SelectedConnectionSite = Sites.FirstOrDefault(x => x.Id == savedSite.Id);
+            StatusMessage = "Connection saved. Test it before starting or importing an export.";
         }
         catch
         {
-            if (!string.IsNullOrWhiteSpace(secretReference))
+            if (!persistenceSucceeded && !string.IsNullOrWhiteSpace(newSecretReference))
             {
-                await secretStore.DeleteAsync(secretReference, CancellationToken.None).ConfigureAwait(true);
+                await DeleteRetiredSecretWithWarningAsync(newSecretReference, "Connection save failed").ConfigureAwait(true);
             }
 
             throw;
+        }
+    }
+
+    private async Task EditSelectedConnectionAsync()
+    {
+        var selected = SelectedConnectionSite ?? throw new InvalidOperationException("Select a connection to edit.");
+        var site = await configurationStore.GetSiteAsync(selected.Id, CancellationToken.None).ConfigureAwait(true)
+            ?? throw new InvalidOperationException("The selected connection no longer exists.");
+        var credential = await configurationStore.GetCredentialProfileAsync(site.CredentialProfileId, CancellationToken.None).ConfigureAwait(true)
+            ?? throw new InvalidOperationException("The selected connection credential profile is missing.");
+        var vendor = Vendors.FirstOrDefault(x => x.Id == site.VendorId)
+            ?? await configurationStore.GetVendorAsync(site.VendorId, CancellationToken.None).ConfigureAwait(true)
+            ?? throw new InvalidOperationException("The selected connection vendor is missing.");
+
+        editingConnectionSiteId = site.Id;
+        editingCredentialProfileId = credential.Id;
+        editingOriginalSecretReference = credential.SecretReference;
+        SelectedConnectionVendor = vendor;
+        ConnectionSiteName = site.Name;
+        ConnectionFhirBaseUrl = site.FhirBaseUrl;
+        ConnectionClientId = credential.ClientId;
+        ConnectionClientSecret = string.Empty;
+        ConnectionRemoveStoredSecret = false;
+        ConnectionTokenEndpoint = credential.TokenEndpoint;
+        ConnectionAssertionEndpoint = credential.AssertionEndpoint ?? string.Empty;
+        ConnectionScope = credential.Scope ?? string.Empty;
+        ConnectionAudience = credential.Audience ?? string.Empty;
+        ConnectionAuthConfigurationJson = string.IsNullOrWhiteSpace(credential.AdditionalConfigurationJson)
+            ? "{}"
+            : credential.AdditionalConfigurationJson;
+        RaiseConnectionEditorState();
+        StatusMessage = $"Editing connection '{site.Name}'. Leave the secret blank to keep the stored value.";
+    }
+
+    private async Task DeleteSelectedConnectionAsync()
+    {
+        var selected = SelectedConnectionSite ?? throw new InvalidOperationException("Select a connection to delete.");
+        var site = await configurationStore.GetSiteAsync(selected.Id, CancellationToken.None).ConfigureAwait(true)
+            ?? throw new InvalidOperationException("The selected connection no longer exists.");
+        var credential = await configurationStore.GetCredentialProfileAsync(site.CredentialProfileId, CancellationToken.None).ConfigureAwait(true)
+            ?? throw new InvalidOperationException("The selected connection credential profile is missing.");
+        var confirmation = dialogs.RequestTypedConfirmation(
+            "Delete connection",
+            $"This permanently deletes the local connection profile. It does not contact the FHIR server. Deletion is blocked if any export job references it.\n\nConnection: {site.Name}\nFHIR base: {site.FhirBaseUrl}",
+            "DELETE CONNECTION");
+        if (confirmation is null)
+        {
+            return;
+        }
+
+        var correlation = Guid.NewGuid().ToString("N");
+        var result = await configurationStore.DeleteConnectionAsync(
+            site.Id,
+            credential.Id,
+            Audit("ConnectionDeleted", site.Id, correlation),
+            CancellationToken.None).ConfigureAwait(true);
+        tokenProvider.Invalidate(credential.Id);
+        if (result.CredentialDeleted && !string.IsNullOrWhiteSpace(credential.SecretReference))
+        {
+            await DeleteRetiredSecretWithWarningAsync(credential.SecretReference, "The connection was deleted").ConfigureAwait(true);
+        }
+
+        if (editingConnectionSiteId == site.Id)
+        {
+            ResetConnectionEditor();
+        }
+
+        SelectedConnectionSite = null;
+        await RefreshAsync().ConfigureAwait(true);
+        StatusMessage = $"Connection '{site.Name}' was deleted locally.";
+    }
+
+    private Task ResetConnectionEditorAsync()
+    {
+        ResetConnectionEditor();
+        StatusMessage = "Connection editor cleared for a new connection.";
+        return Task.CompletedTask;
+    }
+
+    private void ResetConnectionEditor()
+    {
+        editingConnectionSiteId = null;
+        editingCredentialProfileId = null;
+        editingOriginalSecretReference = string.Empty;
+        ConnectionSiteName = string.Empty;
+        ConnectionFhirBaseUrl = string.Empty;
+        ConnectionClientId = string.Empty;
+        ConnectionClientSecret = string.Empty;
+        ConnectionRemoveStoredSecret = false;
+        ConnectionTokenEndpoint = string.Empty;
+        ConnectionAssertionEndpoint = string.Empty;
+        ConnectionScope = string.Empty;
+        ConnectionAudience = string.Empty;
+        ConnectionAuthConfigurationJson = "{}";
+        RaiseConnectionEditorState();
+    }
+
+    private void RaiseConnectionEditorState()
+    {
+        OnPropertyChanged(nameof(IsEditingConnection));
+        OnPropertyChanged(nameof(CanChangeConnectionVendor));
+        OnPropertyChanged(nameof(ConnectionEditorTitle));
+        OnPropertyChanged(nameof(ConnectionSaveButtonText));
+        CommandManager.InvalidateRequerySuggested();
+    }
+
+    private async Task DeleteRetiredSecretWithWarningAsync(string secretReference, string completedAction)
+    {
+        try
+        {
+            await secretStore.DeleteAsync(secretReference, CancellationToken.None).ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            dialogs.ShowError(
+                "Protected secret cleanup warning",
+                completedAction + ", but the retired encrypted secret file could not be removed. " + SecurityRedactor.Redact(exception.Message));
         }
     }
 

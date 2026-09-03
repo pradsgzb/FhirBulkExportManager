@@ -14,6 +14,8 @@ public sealed record JobQuery(
 
 public sealed record PagedResult<T>(IReadOnlyList<T> Items, int TotalCount);
 
+public sealed record ConnectionDeleteResult(bool CredentialDeleted);
+
 public interface IExportStore
 {
     Task AddJobAsync(ExportJob job, ExportJobEvent createdEvent, AuditEvent auditEvent, CancellationToken cancellationToken);
@@ -57,6 +59,9 @@ public interface IConfigurationStore
     Task<IReadOnlyList<Site>> GetSitesAsync(Guid? vendorId, bool enabledOnly, CancellationToken cancellationToken);
     Task<Site?> GetSiteAsync(Guid id, CancellationToken cancellationToken);
     Task AddSiteAsync(Site site, AuditEvent auditEvent, CancellationToken cancellationToken);
+    Task AddConnectionAsync(Site site, CredentialProfile credentialProfile, AuditEvent auditEvent, CancellationToken cancellationToken);
+    Task UpdateConnectionAsync(Site site, CredentialProfile credentialProfile, AuditEvent auditEvent, CancellationToken cancellationToken);
+    Task<ConnectionDeleteResult> DeleteConnectionAsync(Guid siteId, Guid credentialProfileId, AuditEvent auditEvent, CancellationToken cancellationToken);
     Task<CredentialProfile?> GetCredentialProfileAsync(Guid id, CancellationToken cancellationToken);
     Task<IReadOnlyList<CredentialProfile>> GetCredentialProfilesAsync(Guid? vendorId, CancellationToken cancellationToken);
     Task AddCredentialProfileAsync(CredentialProfile profile, AuditEvent auditEvent, CancellationToken cancellationToken);
