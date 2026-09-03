@@ -13,9 +13,9 @@ public sealed class CredentialProfile
         Guid vendorId,
         string name,
         string authenticationType,
-        string clientId,
-        string secretReference,
-        string tokenEndpoint,
+        string? clientId,
+        string? secretReference,
+        string? tokenEndpoint,
         DateTimeOffset createdAtUtc,
         string? scope = null,
         string? audience = null,
@@ -26,9 +26,10 @@ public sealed class CredentialProfile
         VendorId = vendorId;
         Name = Guard.NotNullOrWhiteSpace(name, nameof(name));
         AuthenticationType = Guard.NotNullOrWhiteSpace(authenticationType, nameof(authenticationType));
-        ClientId = Guard.NotNullOrWhiteSpace(clientId, nameof(clientId));
-        SecretReference = Guard.NotNullOrWhiteSpace(secretReference, nameof(secretReference));
-        TokenEndpoint = Guard.NotNullOrWhiteSpace(tokenEndpoint, nameof(tokenEndpoint));
+        var anonymous = string.Equals(AuthenticationType, "None", StringComparison.OrdinalIgnoreCase);
+        ClientId = anonymous ? clientId?.Trim() ?? string.Empty : Guard.NotNullOrWhiteSpace(clientId, nameof(clientId));
+        SecretReference = secretReference?.Trim() ?? string.Empty;
+        TokenEndpoint = anonymous ? tokenEndpoint?.Trim() ?? string.Empty : Guard.NotNullOrWhiteSpace(tokenEndpoint, nameof(tokenEndpoint));
         Scope = scope?.Trim();
         Audience = audience?.Trim();
         AssertionEndpoint = assertionEndpoint?.Trim();
@@ -51,4 +52,3 @@ public sealed class CredentialProfile
     public DateTimeOffset CreatedAtUtc { get; private set; }
     public DateTimeOffset UpdatedAtUtc { get; private set; }
 }
-

@@ -18,6 +18,7 @@
     <ProjectReference Include="../FhirBulkExportManager.PluginHost/FhirBulkExportManager.PluginHost.csproj" />
     <ProjectReference Include="../FhirBulkExportManager.Worker/FhirBulkExportManager.Worker.csproj" />
     <ProjectReference Include="../../plugins/FhirBulkExportManager.Plugin.EClinicalWorks/FhirBulkExportManager.Plugin.EClinicalWorks.csproj" />
+    <ProjectReference Include="../../plugins/FhirBulkExportManager.Plugin.PublicR4/FhirBulkExportManager.Plugin.PublicR4.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Hosting" />

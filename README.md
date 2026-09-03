@@ -2,7 +2,7 @@
 
 A Windows desktop application for operating durable, asynchronous HL7 FHIR Bulk Data exports across vendors and sites. The first adapter targets eClinicalWorks; core workflow, persistence, storage, scheduling, and UI code remain vendor-neutral.
 
-This repository contains source code—not an empty solution. `FhirBulkExportManager.sln` references 19 populated projects: WPF, Domain, Application, Infrastructure, SQLite persistence, plugin contracts/host, worker engine, eClinicalWorks, mock server, and eight test suites.
+This repository contains source code—not an empty solution. `FhirBulkExportManager.sln` references 21 populated projects: WPF, Domain, Application, Infrastructure, SQLite persistence, plugin contracts/host, worker engine, eClinicalWorks, anonymous public FHIR R4 support, mock server, and nine test suites.
 
 ## Safety model
 
@@ -26,7 +26,7 @@ No production setting disables TLS certificate validation. Bearer tokens, assert
 - Windows 10 22H2, Windows 11, or Windows Server with Desktop Experience
 - Visual Studio 2022 with .NET desktop development, or .NET 10 SDK
 - Internet access to the configured vendor endpoints and NuGet for the first restore
-- An eClinicalWorks/HealthWizz integration account and vendor-documented endpoint/field mappings
+- An eClinicalWorks/HealthWizz integration account with its client ID, endpoints, and approved system scopes
 
 ## Build and test
 
@@ -64,17 +64,28 @@ It listens on `http://127.0.0.1:5198` by default. Loopback HTTP is accepted only
 The application initializes and validates SQLite, creates an eClinicalWorks vendor entry, loads trusted plugins, clears stale leases, and opens the Connections page. It never creates or starts an export during onboarding.
 
 1. Open **Connections**.
-2. Enter the site FHIR base URL, client ID, secret, token endpoint, and optional HealthWizz assertion endpoint.
-3. When an assertion endpoint is used, enter the vendor-documented field mapping JSON described below.
-4. Save the profile. The secret is protected with Windows DPAPI for the current Windows user.
-5. Select the saved site and run **Test Connection**. This authenticates and requests `/metadata`; it never invokes `$export`.
+2. Enter the site FHIR base URL, client ID, eCW token endpoint, HealthWizz assertion endpoint, and scope. Leave the client secret empty for the HealthWizz flow.
+3. Leave Authentication mapping JSON as `{}` for the standard HealthWizz request shown below. Advanced field overrides remain available for integrations that use a different schema.
+4. Save the profile. A client secret is only required for direct OAuth without HealthWizz; if supplied, it is protected with Windows DPAPI for the current Windows user.
+5. Select the saved site and run **Test Connection**. This requests `/metadata` anonymously and never invokes authentication or `$export`.
 6. Open **Add New Export Job**, save a Draft, review it, and explicitly start it from **Dashboard & Jobs**.
 
-## eClinicalWorks assertion mapping
+## eClinicalWorks / HealthWizz authentication
 
-The proprietary assertion request schema is deliberately configuration-driven. Do not guess field names. Use the mapping supplied for the specific eClinicalWorks/HealthWizz integration. Templates supported in values are `${clientId}`, `${clientSecret}`, `${scope}`, and `${audience}`.
+When a HealthWizz assertion endpoint is configured, the adapter posts JSON. If Audience is blank, `aud` defaults to the configured eCW token endpoint:
 
-Example structure (field names are illustrative and must be replaced with documented names):
+```json
+{
+  "clientId": "<configured client ID>",
+  "aud": "<configured eCW token endpoint>"
+}
+```
+
+The response is read as a raw JWT. The adapter then exchanges it at the eCW token endpoint with the form fields `grant_type`, `client_assertion_type`, `client_assertion`, and `scope`. It does not send `client_id` or `client_secret` in this assertion exchange.
+
+Authentication mapping JSON is optional and should normally remain `{}`. For an integration with a different assertion request field schema, overrides may use these templates: `${clientId}`, `${clientSecret}`, `${scope}`, and `${audience}`. JSON-wrapped assertion responses are also supported through `assertionResponseProperty`.
+
+Example advanced override:
 
 ```json
 {
@@ -82,9 +93,8 @@ Example structure (field names are illustrative and must be replaced with docume
   "clientAssertionType": "urn:ietf:params:oauth:client-assertion-type:jwt-bearer",
   "assertionResponseProperty": "client_assertion",
   "assertionRequestFields": {
-    "documented_client_field": "${clientId}",
-    "documented_secret_field": "${clientSecret}",
-    "documented_audience_field": "${audience}"
+    "clientId": "${clientId}",
+    "aud": "${audience}"
   },
   "tokenAdditionalFields": {}
 }
@@ -118,7 +128,8 @@ src/
   FhirBulkExportManager.Worker/           scheduler and processors
 plugins/
   FhirBulkExportManager.Plugin.EClinicalWorks/
-tests/                                    eight automated test projects
+  FhirBulkExportManager.Plugin.PublicR4/  anonymous public/test R4 servers
+tests/                                    nine automated test projects
 tools/MockBulkFhirServer/                 deterministic Bulk Data server
 installer/                                MSIX source and build script
 docs/                                     architecture and operations
@@ -152,4 +163,3 @@ The source archive is not a signed deployment artifact. A release must pass Wind
 - `docs/TESTING.md`
 - `docs/TROUBLESHOOTING.md`
 - `docs/REQUIREMENTS_TRACEABILITY.md`
-

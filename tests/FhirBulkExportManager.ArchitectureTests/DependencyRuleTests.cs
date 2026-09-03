@@ -1,6 +1,7 @@
 using FhirBulkExportManager.Application.Services;
 using FhirBulkExportManager.Domain;
 using FhirBulkExportManager.Plugin.EClinicalWorks;
+using FhirBulkExportManager.Plugin.PublicR4;
 
 namespace FhirBulkExportManager.ArchitectureTests;
 
@@ -15,6 +16,7 @@ public sealed class DependencyRuleTests
         Assert.DoesNotContain("PresentationFramework", names);
         Assert.DoesNotContain("FhirBulkExportManager.Infrastructure", names);
         Assert.DoesNotContain("FhirBulkExportManager.Plugin.EClinicalWorks", names);
+        Assert.DoesNotContain("FhirBulkExportManager.Plugin.PublicR4", names);
     }
 
     [Fact]
@@ -29,10 +31,13 @@ public sealed class DependencyRuleTests
     [Fact]
     public void Vendor_plugin_does_not_reference_domain_or_persistence()
     {
-        var names = typeof(EClinicalWorksPlugin).Assembly.GetReferencedAssemblies().Select(x => x.Name).ToArray();
+        var pluginAssemblies = new[] { typeof(EClinicalWorksPlugin).Assembly, typeof(PublicFhirR4Plugin).Assembly };
 
-        Assert.DoesNotContain("FhirBulkExportManager.Domain", names);
-        Assert.DoesNotContain("FhirBulkExportManager.Persistence.Sqlite", names);
+        foreach (var assembly in pluginAssemblies)
+        {
+            var names = assembly.GetReferencedAssemblies().Select(x => x.Name).ToArray();
+            Assert.DoesNotContain("FhirBulkExportManager.Domain", names);
+            Assert.DoesNotContain("FhirBulkExportManager.Persistence.Sqlite", names);
+        }
     }
 }
-

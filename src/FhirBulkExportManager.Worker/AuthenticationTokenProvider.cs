@@ -31,8 +31,13 @@ public sealed class AuthenticationTokenProvider(
 
             var profile = await configurationStore.GetCredentialProfileAsync(job.CredentialProfileId, cancellationToken).ConfigureAwait(false)
                 ?? throw new InvalidOperationException("Credential profile is missing.");
-            var clientSecret = await secretStore.GetAsync(profile.SecretReference, cancellationToken).ConfigureAwait(false)
-                ?? throw new InvalidOperationException("Protected client secret is missing or cannot be decrypted for the current Windows user.");
+            var clientSecret = string.Empty;
+            if (!string.IsNullOrWhiteSpace(profile.SecretReference))
+            {
+                clientSecret = await secretStore.GetAsync(profile.SecretReference, cancellationToken).ConfigureAwait(false)
+                    ?? throw new InvalidOperationException("Protected client secret is missing or cannot be decrypted for the current Windows user.");
+            }
+
             var context = new AuthenticationContext(
                 profile.ClientId,
                 profile.TokenEndpoint,
@@ -53,4 +58,3 @@ public sealed class AuthenticationTokenProvider(
 
     public void Invalidate(Guid credentialProfileId) => cache.TryRemove(credentialProfileId, out _);
 }
-

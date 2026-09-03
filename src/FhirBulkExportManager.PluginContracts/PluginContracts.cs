@@ -143,7 +143,7 @@ public interface IVendorPlugin
 
     Task<AccessToken> AuthenticateAsync(AuthenticationContext context, TimeProvider timeProvider, CancellationToken cancellationToken);
 
-    Task<ConnectionTestResult> TestConnectionAsync(VendorSiteContext site, AccessToken token, CancellationToken cancellationToken);
+    Task<ConnectionTestResult> TestConnectionAsync(VendorSiteContext site, AccessToken? token, CancellationToken cancellationToken);
 
     Uri BuildKickoffUri(BulkExportKickoffRequest request);
 

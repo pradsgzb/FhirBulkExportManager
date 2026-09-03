@@ -2,8 +2,8 @@
 
 ## Source-package checks performed
 
-- The source tree contains 150 files, including 78 C# implementation/test files and four WPF XAML files.
-- The solution contains 19 project entries.
+- The source tree contains 159 files, including 83 C# implementation/test files and four WPF XAML files.
+- The solution contains 21 project entries.
 - Every solution project path exists.
 - Runtime projects contain C# and/or XAML implementation files.
 - Test projects contain executable xUnit tests.
@@ -16,13 +16,14 @@
 - `System.Security.Cryptography.Xml` is centrally transitively pinned to secure .NET 10 servicing version `10.0.11`; repository verification rejects versions below the `10.0.10` patched floor for GHSA-23rf-6693-g89p.
 - The mixed WPF/Windows Forms shell fully qualifies WPF `MessageBox` calls, configures `PerMonitorV2` through `ApplicationHighDpiMode`, and keeps legacy DPI declarations out of `app.manifest` to satisfy WFO0003.
 - Nullable `_since` input is parsed into a non-nullable temporary before assignment, avoiding the invalid nullable `out` argument while preserving optional input semantics.
-- The source ZIP is created only after archive listing, size, and checksum verification.
+- Patch ZIPs are created only after archive listing, path, size, and checksum verification.
 
 ## Windows execution evidence
 
 - A user-supplied Windows .NET SDK 10.0.11 run confirmed that all 19 solution projects compiled in Release configuration before the latest test/snapshot corrections.
 - The subsequent user-supplied test run executed 24 tests: 22 passed and two exposed actionable defects. The eClinicalWorks failure was an invalid test fixture that attempted to place `Content-Location` in the general response-header collection; the fixture now uses the HTTP content-header collection and asserts header insertion. The persistence failure was caused by a non-provider-specific migration snapshot; it has been replaced with the frozen SQLite model described above.
 - The two corrected tests still require a fresh Windows rerun; this report does not claim that unexecuted result as passed.
+- The two newly added public-R4 plugin projects and their new tests also require a fresh Windows restore/build/test run; the source-generation environment cannot claim them as compiled.
 
 ## Source-generation environment limitation
 

@@ -6,6 +6,7 @@ using FhirBulkExportManager.Infrastructure;
 using FhirBulkExportManager.Infrastructure.Logging;
 using FhirBulkExportManager.Persistence.Sqlite;
 using FhirBulkExportManager.Plugin.EClinicalWorks;
+using FhirBulkExportManager.Plugin.PublicR4;
 using FhirBulkExportManager.PluginHost;
 using FhirBulkExportManager.Worker;
 using Microsoft.Extensions.Configuration;
@@ -51,6 +52,7 @@ public partial class App : System.Windows.Application
             builder.Services.AddInfrastructure(builder.Configuration);
             builder.Services.AddSqlitePersistence(builder.Configuration);
             builder.Services.AddEClinicalWorksPlugin();
+            builder.Services.AddPublicFhirR4Plugin();
             builder.Services.AddPluginHost();
             builder.Services.AddExportWorkers();
             builder.Services.AddWpfPresentation();

@@ -22,6 +22,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.App.W
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Plugin.EClinicalWorks", "plugins\FhirBulkExportManager.Plugin.EClinicalWorks\FhirBulkExportManager.Plugin.EClinicalWorks.csproj", "{A1000010-0000-4000-8000-000000000010}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Plugin.PublicR4", "plugins\FhirBulkExportManager.Plugin.PublicR4\FhirBulkExportManager.Plugin.PublicR4.csproj", "{A1000020-0000-4000-8000-000000000020}"
+EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MockBulkFhirServer", "tools\MockBulkFhirServer\MockBulkFhirServer.csproj", "{A1000011-0000-4000-8000-000000000011}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Domain.Tests", "tests\FhirBulkExportManager.Domain.Tests\FhirBulkExportManager.Domain.Tests.csproj", "{A1000012-0000-4000-8000-000000000012}"
@@ -33,6 +35,8 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Persistence.Tests", "tests\FhirBulkExportManager.Persistence.Tests\FhirBulkExportManager.Persistence.Tests.csproj", "{A1000015-0000-4000-8000-000000000015}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Plugin.EClinicalWorks.Tests", "tests\FhirBulkExportManager.Plugin.EClinicalWorks.Tests\FhirBulkExportManager.Plugin.EClinicalWorks.Tests.csproj", "{A1000016-0000-4000-8000-000000000016}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Plugin.PublicR4.Tests", "tests\FhirBulkExportManager.Plugin.PublicR4.Tests\FhirBulkExportManager.Plugin.PublicR4.Tests.csproj", "{A1000021-0000-4000-8000-000000000021}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.IntegrationTests", "tests\FhirBulkExportManager.IntegrationTests\FhirBulkExportManager.IntegrationTests.csproj", "{A1000017-0000-4000-8000-000000000017}"
 EndProject
@@ -122,6 +126,14 @@ Global
 		{A1000019-0000-4000-8000-000000000019}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A1000019-0000-4000-8000-000000000019}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A1000019-0000-4000-8000-000000000019}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000020-0000-4000-8000-000000000020}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000020-0000-4000-8000-000000000020}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000020-0000-4000-8000-000000000020}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000020-0000-4000-8000-000000000020}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000021-0000-4000-8000-000000000021}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000021-0000-4000-8000-000000000021}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000021-0000-4000-8000-000000000021}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000021-0000-4000-8000-000000000021}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

@@ -128,17 +128,17 @@
                             <RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
                         <TextBlock Grid.ColumnSpan="2" Text="Vendor / Site / Credential Setup" FontSize="23" FontWeight="SemiBold" Margin="0,0,0,8" />
-                        <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="Secrets are protected for the current Windows user with DPAPI. Test Connection calls /metadata only and never starts an export." TextWrapping="Wrap" Foreground="#475467" Margin="0,0,0,18" />
+                        <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Text="The built-in HAPI and SMART public test servers use anonymous access; leave all OAuth fields blank. Never send PHI, confidential, or production data to a public test server. For eClinicalWorks, HealthWizz assertion authentication does not require a client secret. Test Connection calls /metadata only and never starts an export." TextWrapping="Wrap" Foreground="#B42318" FontWeight="SemiBold" Margin="0,0,0,18" />
                         <TextBlock Grid.Row="2" Text="Vendor" VerticalAlignment="Center" /><ComboBox Grid.Row="2" Grid.Column="1" ItemsSource="{Binding Vendors}" SelectedItem="{Binding SelectedConnectionVendor}" DisplayMemberPath="Name" />
                         <TextBlock Grid.Row="3" Text="Site name *" VerticalAlignment="Center" /><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding ConnectionSiteName}" />
                         <TextBlock Grid.Row="4" Text="FHIR base URL (HTTPS) *" VerticalAlignment="Center" /><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding ConnectionFhirBaseUrl}" />
-                        <TextBlock Grid.Row="5" Text="OAuth client ID *" VerticalAlignment="Center" /><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding ConnectionClientId}" />
-                        <TextBlock Grid.Row="6" Text="OAuth client secret *" VerticalAlignment="Center" /><PasswordBox Grid.Row="6" Grid.Column="1" PasswordChanged="ClientSecret_PasswordChanged" AutomationProperties.Name="OAuth client secret" Margin="3" Padding="7,5" />
-                        <TextBlock Grid.Row="7" Text="OAuth token endpoint *" VerticalAlignment="Center" /><TextBox Grid.Row="7" Grid.Column="1" Text="{Binding ConnectionTokenEndpoint}" />
+                        <TextBlock Grid.Row="5" Text="OAuth client ID (authenticated vendors)" TextWrapping="Wrap" VerticalAlignment="Center" /><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding ConnectionClientId}" />
+                        <TextBlock Grid.Row="6" Text="OAuth client secret (direct OAuth only)" TextWrapping="Wrap" VerticalAlignment="Center" /><PasswordBox Grid.Row="6" Grid.Column="1" PasswordChanged="ClientSecret_PasswordChanged" AutomationProperties.Name="OAuth client secret (optional)" Margin="3" Padding="7,5" />
+                        <TextBlock Grid.Row="7" Text="OAuth token endpoint (authenticated vendors)" TextWrapping="Wrap" VerticalAlignment="Center" /><TextBox Grid.Row="7" Grid.Column="1" Text="{Binding ConnectionTokenEndpoint}" />
                         <TextBlock Grid.Row="8" Text="HealthWizz assertion endpoint" VerticalAlignment="Center" /><TextBox Grid.Row="8" Grid.Column="1" Text="{Binding ConnectionAssertionEndpoint}" />
                         <TextBlock Grid.Row="9" Text="Scope" VerticalAlignment="Center" /><TextBox Grid.Row="9" Grid.Column="1" Text="{Binding ConnectionScope}" />
-                        <TextBlock Grid.Row="10" Text="Audience" VerticalAlignment="Center" /><TextBox Grid.Row="10" Grid.Column="1" Text="{Binding ConnectionAudience}" />
-                        <TextBlock Grid.Row="11" Text="Authentication mapping JSON" VerticalAlignment="Top" Margin="0,8" /><TextBox Grid.Row="11" Grid.Column="1" Text="{Binding ConnectionAuthConfigurationJson}" AcceptsReturn="True" FontFamily="Consolas" Height="110" VerticalScrollBarVisibility="Auto" />
+                        <TextBlock Grid.Row="10" Text="Assertion audience (defaults to token endpoint)" TextWrapping="Wrap" VerticalAlignment="Center" /><TextBox Grid.Row="10" Grid.Column="1" Text="{Binding ConnectionAudience}" />
+                        <TextBlock Grid.Row="11" Text="Advanced auth overrides JSON (optional)" TextWrapping="Wrap" VerticalAlignment="Top" Margin="0,8" /><TextBox Grid.Row="11" Grid.Column="1" Text="{Binding ConnectionAuthConfigurationJson}" AcceptsReturn="True" FontFamily="Consolas" Height="110" VerticalScrollBarVisibility="Auto" />
                         <Button Grid.Row="12" Grid.Column="1" Content="Save Connection Profile" Command="{Binding SaveConnectionCommand}" HorizontalAlignment="Left" MinWidth="180" Background="{StaticResource PrimaryBrush}" Foreground="White" />
                         <StackPanel Grid.Row="13" Grid.ColumnSpan="2" Margin="0,22,0,0">
                             <Separator />
@@ -178,4 +178,3 @@
         </Border>
     </Grid>
 </Window>
-

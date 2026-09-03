@@ -1,0 +1,325 @@
+using System.Globalization;
+using System.Net;
+using System.Net.Http.Headers;
+using System.Text.Json;
+using FhirBulkExportManager.PluginContracts;
+using FhirBulkExportManager.Shared;
+
+namespace FhirBulkExportManager.Plugin.PublicR4;
+
+public sealed class PublicFhirR4Plugin(IHttpClientFactory httpClientFactory) : IVendorPlugin
+{
+    private const int MaximumControlResponseBytes = 2 * 1024 * 1024;
+    private const int MaximumMetadataResponseBytes = 16 * 1024 * 1024;
+    private static readonly MediaTypeWithQualityHeaderValue FhirJson = new("application/fhir+json");
+    private static readonly MediaTypeWithQualityHeaderValue Json = new("application/json");
+
+    public PluginMetadata Metadata { get; } = new(
+        "public-fhir-r4",
+        "Public/Open FHIR R4",
+        new Version(1, 0, 0),
+        new Version(1, 0, 0),
+        null,
+        "Open-source public test servers",
+        "FHIR Bulk Export Manager Engineering",
+        MaximumDownloadsPerSite: 4);
+
+    public Task<AccessToken> AuthenticateAsync(AuthenticationContext context, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        _ = context;
+        _ = timeProvider;
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(new AccessToken(string.Empty, DateTimeOffset.MaxValue));
+    }
+
+    public async Task<ConnectionTestResult> TestConnectionAsync(VendorSiteContext site, AccessToken? token, CancellationToken cancellationToken)
+    {
+        _ = token;
+        var metadataUri = new Uri(EnsureTrailingSlash(site.FhirBaseUrl), "metadata");
+        using var request = new HttpRequestMessage(HttpMethod.Get, metadataUri);
+        request.Headers.Accept.Add(FhirJson);
+        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+        var body = await ReadSmallBodyAsync(response.Content, cancellationToken, MaximumMetadataResponseBytes).ConfigureAwait(false);
+        return response.IsSuccessStatusCode
+            ? new ConnectionTestResult(true, response.StatusCode, "Public FHIR R4 metadata request succeeded anonymously.", body)
+            : new ConnectionTestResult(false, response.StatusCode, $"Public FHIR R4 metadata request returned {(int)response.StatusCode} {response.ReasonPhrase}.", null);
+    }
+
+    public Uri BuildKickoffUri(BulkExportKickoffRequest request) => BuildExportEndpoint(request);
+
+    public async Task<KickoffResult> KickoffAsync(BulkExportKickoffRequest request, AccessToken token, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        _ = token;
+        var endpoint = BuildKickoffUri(request);
+        using var message = new HttpRequestMessage(HttpMethod.Get, endpoint);
+        message.Headers.Accept.Add(FhirJson);
+        message.Headers.TryAddWithoutValidation("Prefer", "respond-async");
+        message.Headers.TryAddWithoutValidation("X-Correlation-Id", request.CorrelationId);
+        try
+        {
+            using var response = await SendAsync(message, cancellationToken).ConfigureAwait(false);
+            var now = timeProvider.GetUtcNow();
+            var retryAt = RetryAfterParser.Parse(response.Headers.RetryAfter, now);
+            if (response.StatusCode == HttpStatusCode.Accepted)
+            {
+                var rawContentLocation = GetHeader(response, "Content-Location");
+                if (string.IsNullOrWhiteSpace(rawContentLocation) || !Uri.TryCreate(rawContentLocation, UriKind.Absolute, out var exactContentLocation))
+                {
+                    return new KickoffResult(KickoffDisposition.Rejected, response.StatusCode, null, null, endpoint.AbsoluteUri, null, null, "MissingContentLocation", "Server returned 202 without an absolute Content-Location header.");
+                }
+
+                return new KickoffResult(KickoffDisposition.Accepted, response.StatusCode, exactContentLocation, retryAt, endpoint.AbsoluteUri, GetHeader(response, "X-Progress"), null, null, null);
+            }
+
+            var outcome = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
+            {
+                return new KickoffResult(KickoffDisposition.RetryLater, response.StatusCode, null, retryAt ?? now.AddSeconds(30), endpoint.AbsoluteUri, null, outcome, "RemoteTransient", $"Kickoff returned {(int)response.StatusCode}.");
+            }
+
+            return new KickoffResult(KickoffDisposition.Rejected, response.StatusCode, null, null, endpoint.AbsoluteUri, null, outcome, "KickoffRejected", $"Kickoff returned {(int)response.StatusCode} {response.ReasonPhrase}.");
+        }
+        catch (HttpRequestException exception)
+        {
+            return new KickoffResult(KickoffDisposition.Ambiguous, null, null, null, endpoint.AbsoluteUri, null, null, "AmbiguousKickoff", "The connection failed after kickoff was attempted; server acceptance is unknown. " + SecurityRedactor.Redact(exception.Message));
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new KickoffResult(KickoffDisposition.Ambiguous, null, null, null, endpoint.AbsoluteUri, null, null, "AmbiguousKickoffTimeout", "Kickoff timed out after dispatch; server acceptance is unknown. " + SecurityRedactor.Redact(exception.Message));
+        }
+    }
+
+    public async Task<PollResult> PollAsync(Uri exactContentLocation, VendorSiteContext site, AccessToken token, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        _ = site;
+        _ = token;
+        using var request = new HttpRequestMessage(HttpMethod.Get, exactContentLocation);
+        request.Headers.Accept.Add(Json);
+        try
+        {
+            using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var now = timeProvider.GetUtcNow();
+            var retryAt = RetryAfterParser.Parse(response.Headers.RetryAfter, now);
+            var progress = GetHeader(response, "X-Progress");
+            switch (response.StatusCode)
+            {
+                case HttpStatusCode.Accepted:
+                    return new PollResult(PollDisposition.Running, response.StatusCode, retryAt, progress, null, null, null, null);
+                case HttpStatusCode.OK:
+                    var manifest = await ReadSmallBodyAsync(response.Content, cancellationToken, maximumBytes: 16 * 1024 * 1024).ConfigureAwait(false);
+                    return new PollResult(PollDisposition.Complete, response.StatusCode, null, progress, manifest, null, null, null);
+                case HttpStatusCode.Unauthorized:
+                    return new PollResult(PollDisposition.AuthenticationRequired, response.StatusCode, now, progress, null, await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false), "Unauthorized", "The public server unexpectedly requested authentication.");
+                case HttpStatusCode.Forbidden:
+                    return new PollResult(PollDisposition.AuthorizationDenied, response.StatusCode, null, progress, null, await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false), "Forbidden", "The public server denied this operation.");
+                case HttpStatusCode.Gone:
+                    return new PollResult(PollDisposition.Expired, response.StatusCode, null, progress, null, await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false), "RemoteExpired", "The remote export has expired.");
+                case HttpStatusCode.NotFound:
+                    return new PollResult(PollDisposition.NotFound, response.StatusCode, null, progress, null, await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false), "RemoteNotFound", "Remote job was not found; retention expiry or prior cleanup may be the cause.");
+                case HttpStatusCode.TooManyRequests:
+                    return new PollResult(PollDisposition.RetryLater, response.StatusCode, retryAt ?? now.AddSeconds(60), progress, null, null, "RateLimited", "FHIR server requested backoff.");
+                default:
+                    var outcome = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+                    if ((int)response.StatusCode >= 500 || response.StatusCode == HttpStatusCode.RequestTimeout)
+                    {
+                        return new PollResult(PollDisposition.RetryLater, response.StatusCode, retryAt ?? now.AddSeconds(30), progress, null, outcome, "RemoteTransient", $"Status request returned {(int)response.StatusCode}.");
+                    }
+
+                    return new PollResult(PollDisposition.FailedPermanent, response.StatusCode, null, progress, null, outcome, "RemoteRejected", $"Status request returned {(int)response.StatusCode} {response.ReasonPhrase}.");
+            }
+        }
+        catch (HttpRequestException exception)
+        {
+            return new PollResult(PollDisposition.RetryLater, HttpStatusCode.ServiceUnavailable, timeProvider.GetUtcNow().AddSeconds(30), null, null, null, "NetworkTransient", SecurityRedactor.Redact(exception.Message));
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new PollResult(PollDisposition.RetryLater, HttpStatusCode.RequestTimeout, timeProvider.GetUtcNow().AddSeconds(30), null, null, null, "RequestTimeout", SecurityRedactor.Redact(exception.Message));
+        }
+    }
+
+    public NormalizedManifest NormalizeManifest(string exactManifestJson)
+    {
+        using var document = JsonDocument.Parse(exactManifestJson);
+        if (document.RootElement.ValueKind != JsonValueKind.Object)
+        {
+            throw new JsonException("Bulk Data completion manifest must be a JSON object.");
+        }
+
+        var transactionTime = GetOptionalString(document.RootElement, "transactionTime");
+        var originalRequest = GetOptionalString(document.RootElement, "request");
+        var requiresAccessToken = document.RootElement.TryGetProperty("requiresAccessToken", out var accessElement) && accessElement.ValueKind == JsonValueKind.True;
+        var files = new List<ManifestFileContract>();
+        AddFiles(document.RootElement, "output", ManifestFileCategory.Output, files);
+        AddFiles(document.RootElement, "deleted", ManifestFileCategory.Deleted, files);
+        AddFiles(document.RootElement, "error", ManifestFileCategory.Error, files);
+        if (files.Count == 0)
+        {
+            throw new JsonException("Completion manifest contains no output, deleted, or error files.");
+        }
+
+        return new NormalizedManifest(exactManifestJson, transactionTime, originalRequest, requiresAccessToken, files);
+    }
+
+    public HttpRequestMessage CreateDownloadRequest(Uri remoteUri, Uri exactStatusUri, AccessToken? token, long? resumeOffset, EntityTagHeaderValue? ifRangeEtag, DateTimeOffset? ifRangeLastModified)
+    {
+        _ = exactStatusUri;
+        _ = token;
+        var request = new HttpRequestMessage(HttpMethod.Get, remoteUri);
+        request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/fhir+ndjson"));
+        if (resumeOffset is > 0)
+        {
+            request.Headers.Range = new RangeHeaderValue(resumeOffset, null);
+            if (ifRangeEtag is not null)
+            {
+                request.Headers.IfRange = new RangeConditionHeaderValue(ifRangeEtag);
+            }
+            else if (ifRangeLastModified is not null)
+            {
+                request.Headers.IfRange = new RangeConditionHeaderValue(ifRangeLastModified.Value);
+            }
+        }
+
+        return request;
+    }
+
+    public Task<CleanupResult> CancelAsync(Uri exactContentLocation, VendorSiteContext site, AccessToken token, TimeProvider timeProvider, CancellationToken cancellationToken) =>
+        SendDeleteAsync(exactContentLocation, site, token, timeProvider, cancellationToken);
+
+    public Task<CleanupResult> CleanupAsync(Uri exactContentLocation, VendorSiteContext site, AccessToken token, TimeProvider timeProvider, CancellationToken cancellationToken) =>
+        SendDeleteAsync(exactContentLocation, site, token, timeProvider, cancellationToken);
+
+    public async Task<CleanupVerificationResult> VerifyCleanupAsync(Uri exactContentLocation, VendorSiteContext site, AccessToken token, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        _ = site;
+        _ = token;
+        using var request = new HttpRequestMessage(HttpMethod.Get, exactContentLocation);
+        try
+        {
+            using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            return response.StatusCode switch
+            {
+                HttpStatusCode.NotFound or HttpStatusCode.Gone => new CleanupVerificationResult(CleanupVerificationDisposition.VerifiedDeleted, response.StatusCode, null),
+                HttpStatusCode.OK or HttpStatusCode.Accepted => new CleanupVerificationResult(CleanupVerificationDisposition.StillPresent, response.StatusCode, timeProvider.GetUtcNow().AddSeconds(30)),
+                HttpStatusCode.TooManyRequests => new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, response.StatusCode, RetryAfterParser.Parse(response.Headers.RetryAfter, timeProvider.GetUtcNow()) ?? timeProvider.GetUtcNow().AddSeconds(60)),
+                _ when (int)response.StatusCode >= 500 => new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, response.StatusCode, timeProvider.GetUtcNow().AddSeconds(30)),
+                _ => new CleanupVerificationResult(CleanupVerificationDisposition.Unknown, response.StatusCode, null),
+            };
+        }
+        catch (HttpRequestException)
+        {
+            return new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, HttpStatusCode.ServiceUnavailable, timeProvider.GetUtcNow().AddSeconds(30));
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, HttpStatusCode.RequestTimeout, timeProvider.GetUtcNow().AddSeconds(30));
+        }
+    }
+
+    private async Task<CleanupResult> SendDeleteAsync(Uri exactContentLocation, VendorSiteContext site, AccessToken token, TimeProvider timeProvider, CancellationToken cancellationToken)
+    {
+        _ = site;
+        _ = token;
+        using var request = new HttpRequestMessage(HttpMethod.Delete, exactContentLocation);
+        try
+        {
+            using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            var success = response.IsSuccessStatusCode || response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone;
+            return new CleanupResult(success, response.StatusCode, success ? null : RetryAfterParser.Parse(response.Headers.RetryAfter, timeProvider.GetUtcNow()) ?? timeProvider.GetUtcNow().AddSeconds(30), success ? null : $"DELETE returned {(int)response.StatusCode} {response.ReasonPhrase}.");
+        }
+        catch (HttpRequestException exception)
+        {
+            return new CleanupResult(false, HttpStatusCode.ServiceUnavailable, timeProvider.GetUtcNow().AddSeconds(30), SecurityRedactor.Redact(exception.Message));
+        }
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new CleanupResult(false, HttpStatusCode.RequestTimeout, timeProvider.GetUtcNow().AddSeconds(30), SecurityRedactor.Redact(exception.Message));
+        }
+    }
+
+    private static Uri BuildExportEndpoint(BulkExportKickoffRequest request)
+    {
+        var baseUri = EnsureTrailingSlash(request.Site.FhirBaseUrl);
+        var relative = request.ExportType switch
+        {
+            PluginExportType.System => "$export",
+            PluginExportType.Group when !string.IsNullOrWhiteSpace(request.GroupId) => $"Group/{Uri.EscapeDataString(request.GroupId)}/$export",
+            PluginExportType.Patient => "Patient/$export",
+            _ => throw new InvalidOperationException("A Group export requires a Group ID."),
+        };
+        var endpoint = new Uri(baseUri, relative);
+        var query = new List<string>();
+        if (request.SinceUtc is { } since)
+        {
+            query.Add("_since=" + Uri.EscapeDataString(since.ToUniversalTime().ToString("O", CultureInfo.InvariantCulture)));
+        }
+
+        if (request.ResourceTypes.Count > 0)
+        {
+            query.Add("_type=" + Uri.EscapeDataString(string.Join(",", request.ResourceTypes)));
+        }
+
+        foreach (var filter in request.TypeFilters)
+        {
+            query.Add("_typeFilter=" + Uri.EscapeDataString(filter));
+        }
+
+        query.Add("_outputFormat=" + Uri.EscapeDataString(request.OutputFormat));
+        return new UriBuilder(endpoint) { Query = string.Join("&", query) }.Uri;
+    }
+
+    private static void AddFiles(JsonElement root, string propertyName, ManifestFileCategory category, List<ManifestFileContract> output)
+    {
+        if (!root.TryGetProperty(propertyName, out var array) || array.ValueKind == JsonValueKind.Null)
+        {
+            return;
+        }
+
+        if (array.ValueKind != JsonValueKind.Array)
+        {
+            throw new JsonException($"Manifest property '{propertyName}' must be an array.");
+        }
+
+        foreach (var item in array.EnumerateArray())
+        {
+            if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("url", out var urlElement) || !Uri.TryCreate(urlElement.GetString(), UriKind.Absolute, out var uri))
+            {
+                throw new JsonException($"Manifest '{propertyName}' entry is missing an absolute url.");
+            }
+
+            output.Add(new ManifestFileContract(category, GetOptionalString(item, "type"), uri));
+        }
+    }
+
+    private static string? GetOptionalString(JsonElement element, string propertyName) =>
+        element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String ? property.GetString() : null;
+
+    private Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+        httpClientFactory.CreateClient("VendorApi").SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+
+    private static async Task<string> ReadSmallBodyAsync(HttpContent content, CancellationToken cancellationToken, int maximumBytes = MaximumControlResponseBytes)
+    {
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var buffer = new MemoryStream(capacity: Math.Min(maximumBytes, 64 * 1024));
+        var chunk = new byte[64 * 1024];
+        int read;
+        while ((read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            if (buffer.Length + read > maximumBytes)
+            {
+                throw new InvalidDataException($"FHIR control response exceeded the safe {maximumBytes}-byte limit.");
+            }
+
+            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.GetBuffer(), 0, checked((int)buffer.Length));
+    }
+
+    private static string? GetHeader(HttpResponseMessage response, string name) =>
+        response.Headers.TryGetValues(name, out var values) ? values.FirstOrDefault() :
+        response.Content.Headers.TryGetValues(name, out values) ? values.FirstOrDefault() : null;
+
+    private static Uri EnsureTrailingSlash(Uri uri) =>
+        uri.AbsoluteUri.EndsWith("/", StringComparison.Ordinal) ? uri : new Uri(uri.AbsoluteUri + '/', UriKind.Absolute);
+}

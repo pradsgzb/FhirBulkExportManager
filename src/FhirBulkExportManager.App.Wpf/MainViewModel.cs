@@ -147,7 +147,18 @@ public sealed class MainViewModel : ObservableObject
         }
     }
 
-    public Vendor? SelectedVendor { get => selectedVendor; set => SetProperty(ref selectedVendor, value); }
+    public Vendor? SelectedVendor
+    {
+        get => selectedVendor;
+        set
+        {
+            if (SetProperty(ref selectedVendor, value) && value is not null)
+            {
+                SelectedSite = Sites.FirstOrDefault(x => x.VendorId == value.Id);
+                SelectedCredential = Credentials.FirstOrDefault(x => x.VendorId == value.Id);
+            }
+        }
+    }
     public Site? SelectedSite { get => selectedSite; set => SetProperty(ref selectedSite, value); }
     public CredentialProfile? SelectedCredential { get => selectedCredential; set => SetProperty(ref selectedCredential, value); }
     public Vendor? SelectedConnectionVendor { get => selectedConnectionVendor; set { if (SetProperty(ref selectedConnectionVendor, value)) CommandManager.InvalidateRequerySuggested(); } }
@@ -349,30 +360,40 @@ public sealed class MainViewModel : ObservableObject
     private async Task SaveConnectionAsync()
     {
         var vendor = SelectedConnectionVendor ?? throw new InvalidOperationException("Select a vendor.");
+        var anonymous = string.Equals(vendor.PluginId, FirstRunBootstrapper.PublicFhirR4PluginId, StringComparison.Ordinal);
         var fhirUri = Guard.AbsoluteHttpsUri(ConnectionFhirBaseUrl, nameof(ConnectionFhirBaseUrl));
-        _ = Guard.AbsoluteHttpsUri(ConnectionTokenEndpoint, nameof(ConnectionTokenEndpoint));
-        if (!string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint))
+        if (!anonymous)
         {
-            _ = Guard.AbsoluteHttpsUri(ConnectionAssertionEndpoint, nameof(ConnectionAssertionEndpoint));
-        }
+            _ = Guard.AbsoluteHttpsUri(ConnectionTokenEndpoint, nameof(ConnectionTokenEndpoint));
+            if (!string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint))
+            {
+                _ = Guard.AbsoluteHttpsUri(ConnectionAssertionEndpoint, nameof(ConnectionAssertionEndpoint));
+            }
 
-        using (JsonDocument.Parse(string.IsNullOrWhiteSpace(ConnectionAuthConfigurationJson) ? "{}" : ConnectionAuthConfigurationJson))
-        {
-        }
-        if (string.IsNullOrWhiteSpace(ConnectionClientSecret))
-        {
-            throw new InvalidOperationException("Client secret is required and will be protected with Windows DPAPI.");
+            using (JsonDocument.Parse(string.IsNullOrWhiteSpace(ConnectionAuthConfigurationJson) ? "{}" : ConnectionAuthConfigurationJson))
+            {
+            }
+            if (string.IsNullOrWhiteSpace(ConnectionClientSecret) && string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint))
+            {
+                throw new InvalidOperationException("Configure a HealthWizz assertion endpoint or provide a client secret for direct OAuth client credentials.");
+            }
         }
 
         var now = timeProvider.GetUtcNow();
-        var secretReference = await secretStore.SaveAsync("oauth-client-secret", ConnectionClientSecret.AsMemory(), CancellationToken.None).ConfigureAwait(true);
+        var secretReference = string.Empty;
+        if (!anonymous && !string.IsNullOrWhiteSpace(ConnectionClientSecret))
+        {
+            secretReference = await secretStore.SaveAsync("oauth-client-secret", ConnectionClientSecret.AsMemory(), CancellationToken.None).ConfigureAwait(true);
+        }
+
         try
         {
             var profile = new CredentialProfile(
-                Guid.NewGuid(), vendor.Id, ConnectionSiteName + " OAuth", "OAuth2ClientCredentials", ConnectionClientId,
-                secretReference, ConnectionTokenEndpoint, now, ConnectionScope, ConnectionAudience,
-                string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint) ? null : ConnectionAssertionEndpoint,
-                string.IsNullOrWhiteSpace(ConnectionAuthConfigurationJson) ? "{}" : ConnectionAuthConfigurationJson);
+                Guid.NewGuid(), vendor.Id, ConnectionSiteName + (anonymous ? " Anonymous" : " OAuth"), anonymous ? "None" : "OAuth2ClientCredentials",
+                anonymous ? null : ConnectionClientId, secretReference, anonymous ? null : ConnectionTokenEndpoint, now,
+                anonymous ? null : ConnectionScope, anonymous ? null : ConnectionAudience,
+                anonymous || string.IsNullOrWhiteSpace(ConnectionAssertionEndpoint) ? null : ConnectionAssertionEndpoint,
+                anonymous || string.IsNullOrWhiteSpace(ConnectionAuthConfigurationJson) ? "{}" : ConnectionAuthConfigurationJson);
             var correlation = Guid.NewGuid().ToString("N");
             await configurationStore.AddCredentialProfileAsync(profile, Audit("CredentialProfileCreated", profile.Id, correlation), CancellationToken.None).ConfigureAwait(true);
             var site = new Site(Guid.NewGuid(), vendor.Id, ConnectionSiteName, fhirUri, profile.Id, now);
@@ -384,7 +405,11 @@ public sealed class MainViewModel : ObservableObject
         }
         catch
         {
-            await secretStore.DeleteAsync(secretReference, CancellationToken.None).ConfigureAwait(true);
+            if (!string.IsNullOrWhiteSpace(secretReference))
+            {
+                await secretStore.DeleteAsync(secretReference, CancellationToken.None).ConfigureAwait(true);
+            }
+
             throw;
         }
     }
@@ -394,15 +419,9 @@ public sealed class MainViewModel : ObservableObject
         var site = SelectedConnectionSite ?? throw new InvalidOperationException("Select a site.");
         var vendor = await configurationStore.GetVendorAsync(site.VendorId, CancellationToken.None).ConfigureAwait(true)
             ?? throw new InvalidOperationException("Vendor is missing.");
-        var profile = await configurationStore.GetCredentialProfileAsync(site.CredentialProfileId, CancellationToken.None).ConfigureAwait(true)
-            ?? throw new InvalidOperationException("Credential profile is missing.");
-        var secret = await secretStore.GetAsync(profile.SecretReference, CancellationToken.None).ConfigureAwait(true)
-            ?? throw new InvalidOperationException("Protected secret is unavailable.");
         var plugin = pluginCatalog.GetRequired(vendor.PluginId, vendor.PluginVersion);
-        var auth = new AuthenticationContext(profile.ClientId, profile.TokenEndpoint, profile.AssertionEndpoint, profile.Scope, profile.Audience, profile.AdditionalConfigurationJson, new SecretMaterial(secret, new Dictionary<string, string>()));
-        var token = await plugin.AuthenticateAsync(auth, timeProvider, CancellationToken.None).ConfigureAwait(true);
         var context = new VendorSiteContext(vendor.Id, site.Id, new Uri(site.FhirBaseUrl), site.TenantIdentifier, site.PracticeCode, "{}");
-        var result = await plugin.TestConnectionAsync(context, token, CancellationToken.None).ConfigureAwait(true);
+        var result = await plugin.TestConnectionAsync(context, token: null, cancellationToken: CancellationToken.None).ConfigureAwait(true);
         if (!result.Succeeded)
         {
             throw new InvalidOperationException(result.Summary);

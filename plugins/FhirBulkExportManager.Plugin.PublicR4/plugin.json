@@ -1,0 +1,12 @@
+{
+  "id": "public-fhir-r4",
+  "name": "Public/Open FHIR R4",
+  "version": "1.0.0",
+  "minimumHostVersion": "1.0.0",
+  "maximumHostVersion": null,
+  "entryAssembly": "FhirBulkExportManager.Plugin.PublicR4.dll",
+  "vendor": "Open-source public test servers",
+  "publisher": "FHIR Bulk Export Manager Engineering",
+  "sha256": null,
+  "enabled": true
+}

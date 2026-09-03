@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Text.Json;
 using FhirBulkExportManager.PluginContracts;
 using FhirBulkExportManager.Shared;
@@ -11,6 +12,7 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
 {
     private const int MaximumControlResponseBytes = 2 * 1024 * 1024;
     private static readonly MediaTypeWithQualityHeaderValue FhirJson = new("application/fhir+json");
+    private static readonly MediaTypeWithQualityHeaderValue Json = new("application/json");
 
     public PluginMetadata Metadata { get; } = new(
         "eclinicalworks",
@@ -28,35 +30,30 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         string? assertion = null;
         if (!string.IsNullOrWhiteSpace(context.AssertionEndpoint))
         {
-            if (configuration.AssertionRequestFields.Count == 0)
-            {
-                throw new InvalidOperationException("HealthWizz assertionEndpoint is configured, but AssertionRequestFields is empty. Configure the documented vendor request field mapping.");
-            }
-
-            var assertionFields = configuration.AssertionRequestFields.ToDictionary(
-                x => x.Key,
-                x => ResolveTemplate(x.Value, context),
-                StringComparer.Ordinal);
+            var assertionFields = configuration.AssertionRequestFields.Count == 0
+                ? new Dictionary<string, string>(StringComparer.Ordinal)
+                {
+                    ["clientId"] = context.ClientId,
+                    ["aud"] = GetAssertionAudience(context),
+                }
+                : configuration.AssertionRequestFields.ToDictionary(
+                    x => x.Key,
+                    x => ResolveTemplate(x.Value, context),
+                    StringComparer.Ordinal);
             using var assertionRequest = new HttpRequestMessage(HttpMethod.Post, RequireHttpsOrLoopback(context.AssertionEndpoint))
             {
-                Content = new FormUrlEncodedContent(assertionFields),
+                Content = new StringContent(JsonSerializer.Serialize(assertionFields, JsonDefaults.Options), Encoding.UTF8),
             };
+            assertionRequest.Content!.Headers.ContentType = new MediaTypeHeaderValue("application/json");
             using var assertionResponse = await SendAsync(assertionRequest, cancellationToken).ConfigureAwait(false);
-            var assertionJson = await ReadSmallBodyAsync(assertionResponse.Content, cancellationToken).ConfigureAwait(false);
+            var assertionPayload = await ReadSmallBodyAsync(assertionResponse.Content, cancellationToken).ConfigureAwait(false);
             assertionResponse.EnsureSuccessStatusCode();
-            using var assertionDocument = JsonDocument.Parse(assertionJson);
-            if (!assertionDocument.RootElement.TryGetProperty(configuration.AssertionResponseProperty, out var assertionElement) || string.IsNullOrWhiteSpace(assertionElement.GetString()))
-            {
-                throw new InvalidOperationException($"Assertion response does not contain configured property '{configuration.AssertionResponseProperty}'.");
-            }
-
-            assertion = assertionElement.GetString();
+            assertion = ReadAssertion(assertionPayload, configuration.AssertionResponseProperty);
         }
 
         var tokenFields = new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["grant_type"] = configuration.GrantType,
-            ["client_id"] = context.ClientId,
         };
         if (!string.IsNullOrWhiteSpace(context.Scope))
         {
@@ -70,6 +67,12 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         }
         else
         {
+            if (string.IsNullOrWhiteSpace(context.Secrets.ClientSecret))
+            {
+                throw new InvalidOperationException("A client secret is required when no HealthWizz assertion endpoint is configured.");
+            }
+
+            tokenFields["client_id"] = context.ClientId;
             tokenFields["client_secret"] = context.Secrets.ClientSecret;
         }
 
@@ -100,15 +103,16 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         return new AccessToken(accessTokenElement.GetString()!, timeProvider.GetUtcNow().AddSeconds(expiresIn), tokenType);
     }
 
-    public async Task<ConnectionTestResult> TestConnectionAsync(VendorSiteContext site, AccessToken token, CancellationToken cancellationToken)
+    public async Task<ConnectionTestResult> TestConnectionAsync(VendorSiteContext site, AccessToken? token, CancellationToken cancellationToken)
     {
+        _ = token;
         var metadataUri = new Uri(EnsureTrailingSlash(site.FhirBaseUrl), "metadata");
-        using var request = CreateAuthorizedRequest(HttpMethod.Get, metadataUri, token);
+        using var request = new HttpRequestMessage(HttpMethod.Get, metadataUri);
         request.Headers.Accept.Add(FhirJson);
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         var body = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
         return response.IsSuccessStatusCode
-            ? new ConnectionTestResult(true, response.StatusCode, "Authentication and FHIR metadata request succeeded.", body)
+            ? new ConnectionTestResult(true, response.StatusCode, "FHIR metadata request succeeded without authentication.", body)
             : new ConnectionTestResult(false, response.StatusCode, $"FHIR metadata request returned {(int)response.StatusCode} {response.ReasonPhrase}.", null);
     }
 
@@ -159,7 +163,7 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
     {
         _ = site;
         using var request = CreateAuthorizedRequest(HttpMethod.Get, exactContentLocation, token);
-        request.Headers.Accept.Add(FhirJson);
+        request.Headers.Accept.Add(Json);
         try
         {
             using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
@@ -362,13 +366,46 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
     private static EcwAuthenticationConfiguration DeserializeAuthenticationConfiguration(string json) =>
         JsonSerializer.Deserialize<EcwAuthenticationConfiguration>(string.IsNullOrWhiteSpace(json) ? "{}" : json, JsonDefaults.Options) ?? new EcwAuthenticationConfiguration();
 
+    private static string GetAssertionAudience(AuthenticationContext context) =>
+        string.IsNullOrWhiteSpace(context.Audience) ? context.TokenEndpoint : context.Audience;
+
+    private static string ReadAssertion(string payload, string responseProperty)
+    {
+        var value = payload.Trim();
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            throw new InvalidOperationException("HealthWizz assertion response was empty.");
+        }
+
+        if (!value.StartsWith('{') && !value.StartsWith('"'))
+        {
+            return value;
+        }
+
+        using var document = JsonDocument.Parse(value);
+        if (document.RootElement.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(document.RootElement.GetString()))
+        {
+            return document.RootElement.GetString()!;
+        }
+
+        if (document.RootElement.ValueKind == JsonValueKind.Object &&
+            document.RootElement.TryGetProperty(responseProperty, out var assertionElement) &&
+            assertionElement.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(assertionElement.GetString()))
+        {
+            return assertionElement.GetString()!;
+        }
+
+        throw new InvalidOperationException($"HealthWizz assertion response was neither a raw JWT nor a JSON string property named '{responseProperty}'.");
+    }
+
     private static string ResolveTemplate(string template, AuthenticationContext context)
     {
         var result = template
             .Replace("${clientId}", context.ClientId, StringComparison.Ordinal)
             .Replace("${clientSecret}", context.Secrets.ClientSecret, StringComparison.Ordinal)
             .Replace("${scope}", context.Scope ?? string.Empty, StringComparison.Ordinal)
-            .Replace("${audience}", context.Audience ?? string.Empty, StringComparison.Ordinal);
+            .Replace("${audience}", GetAssertionAudience(context), StringComparison.Ordinal);
         foreach (var secret in context.Secrets.AdditionalSecrets)
         {
             result = result.Replace("${secret:" + secret.Key + "}", secret.Value, StringComparison.Ordinal);
