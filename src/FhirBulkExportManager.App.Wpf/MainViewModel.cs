@@ -27,6 +27,10 @@ public sealed class MainViewModel : ObservableObject
     private readonly IWindowNavigationService navigation;
     private readonly TimeProvider timeProvider;
     private ExportJob? selectedJob;
+    private JobStatusHistoryItem? selectedStatusHistory;
+    private HttpExchangeViewItem? selectedHttpExchange;
+    private string jobDetailStatus = "Select a job to inspect its history.";
+    private long jobDetailLoadGeneration;
     private Vendor? selectedVendor;
     private Site? selectedSite;
     private CredentialProfile? selectedCredential;
@@ -107,6 +111,8 @@ public sealed class MainViewModel : ObservableObject
     public ObservableCollection<Vendor> Vendors { get; } = [];
     public ObservableCollection<Site> Sites { get; } = [];
     public ObservableCollection<CredentialProfile> Credentials { get; } = [];
+    public ObservableCollection<JobStatusHistoryItem> SelectedJobHistory { get; } = [];
+    public ObservableCollection<HttpExchangeViewItem> SelectedHttpExchanges { get; } = [];
     public Array ExportTypes => Enum.GetValues(typeof(ExportType));
     public Array Priorities => Enum.GetValues(typeof(JobPriority));
 
@@ -143,9 +149,32 @@ public sealed class MainViewModel : ObservableObject
             if (SetProperty(ref selectedJob, value))
             {
                 CommandManager.InvalidateRequerySuggested();
+                var generation = Interlocked.Increment(ref jobDetailLoadGeneration);
+                _ = LoadSelectedJobHistoryAsync(value?.Id, generation);
             }
         }
     }
+
+    public JobStatusHistoryItem? SelectedStatusHistory
+    {
+        get => selectedStatusHistory;
+        set
+        {
+            if (SetProperty(ref selectedStatusHistory, value))
+            {
+                Replace(SelectedHttpExchanges, value?.HttpExchanges ?? []);
+                SelectedHttpExchange = SelectedHttpExchanges.FirstOrDefault();
+            }
+        }
+    }
+
+    public HttpExchangeViewItem? SelectedHttpExchange
+    {
+        get => selectedHttpExchange;
+        set => SetProperty(ref selectedHttpExchange, value);
+    }
+
+    public string JobDetailStatus { get => jobDetailStatus; private set => SetProperty(ref jobDetailStatus, value); }
 
     public Vendor? SelectedVendor
     {
@@ -221,6 +250,48 @@ public sealed class MainViewModel : ObservableObject
         SelectedJob = selectedId is null ? Jobs.FirstOrDefault() : Jobs.FirstOrDefault(x => x.Id == selectedId) ?? Jobs.FirstOrDefault();
         RaiseDashboardCounts();
         StatusMessage = $"Showing {Jobs.Count:N0} of {result.TotalCount:N0} jobs. Last refreshed {timeProvider.GetLocalNow():t}.";
+    }
+
+    private async Task LoadSelectedJobHistoryAsync(Guid? jobId, long generation)
+    {
+        if (jobId is null)
+        {
+            Replace(SelectedJobHistory, []);
+            SelectedStatusHistory = null;
+            JobDetailStatus = "Select a job to inspect its history.";
+            return;
+        }
+
+        JobDetailStatus = "Loading job history…";
+        try
+        {
+            var events = await jobService.GetTimelineAsync(jobId.Value, CancellationToken.None).ConfigureAwait(true);
+            if (generation != Interlocked.Read(ref jobDetailLoadGeneration) || SelectedJob?.Id != jobId)
+            {
+                return;
+            }
+
+            var history = events
+                .OrderByDescending(item => item.TimestampUtc)
+                .ThenByDescending(item => item.Id)
+                .Select(JobStatusHistoryItem.Create)
+                .ToArray();
+            Replace(SelectedJobHistory, history);
+            SelectedStatusHistory = SelectedJobHistory.FirstOrDefault();
+            var exchangeCount = history.Sum(item => item.HttpExchanges.Count);
+            JobDetailStatus = $"{history.Length:N0} status entries · {exchangeCount:N0} preserved HTTP exchanges";
+        }
+        catch (Exception exception)
+        {
+            if (generation != Interlocked.Read(ref jobDetailLoadGeneration))
+            {
+                return;
+            }
+
+            Replace(SelectedJobHistory, []);
+            SelectedStatusHistory = null;
+            JobDetailStatus = "Could not load history: " + SecurityRedactor.Redact(exception.Message);
+        }
     }
 
     private async Task CreateJobAsync()

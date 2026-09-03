@@ -171,6 +171,13 @@ public sealed class SqliteExportStore(IDbContextFactory<ExportDbContext> context
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task AddJobEventAsync(ExportJobEvent jobEvent, CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        context.ExportJobEvents.Add(jobEvent);
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+    }
+
     public async Task<IReadOnlyList<ExportJobEvent>> GetTimelineAsync(Guid jobId, CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);

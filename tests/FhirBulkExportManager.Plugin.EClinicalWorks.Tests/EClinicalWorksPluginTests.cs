@@ -95,6 +95,11 @@ public sealed class EClinicalWorksPluginTests
         Assert.Equal("access-token-for-test", token.Value);
         Assert.Equal("Bearer", token.TokenType);
         Assert.Equal(2, requestCount);
+        Assert.Equal(2, token.HttpExchanges?.Count);
+        var preservedHistory = JsonSerializer.Serialize(token.HttpExchanges);
+        Assert.DoesNotContain(assertion, preservedHistory, StringComparison.Ordinal);
+        Assert.DoesNotContain("access-token-for-test", preservedHistory, StringComparison.Ordinal);
+        Assert.Contains("REDACTED", preservedHistory, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -147,10 +152,12 @@ public sealed class EClinicalWorksPluginTests
             Assert.Equal("Bearer", request.Headers.Authorization?.Scheme);
             Assert.Equal("access-token-for-test", request.Headers.Authorization?.Parameter);
             Assert.Contains(request.Headers.Accept, value => value.MediaType == "application/json");
-            return new HttpResponseMessage(HttpStatusCode.Accepted)
+            var response = new HttpResponseMessage(HttpStatusCode.Accepted)
             {
                 Content = new ByteArrayContent([]),
             };
+            Assert.True(response.Headers.TryAddWithoutValidation("X-Progress", "Searched 259290 of 256811 patients"));
+            return response;
         });
         var plugin = new EClinicalWorksPlugin(new StaticHttpClientFactory(new HttpClient(handler)));
         var site = new VendorSiteContext(Guid.NewGuid(), Guid.NewGuid(), new Uri("https://example.test/fhir/"), null, null, "{}");
@@ -163,6 +170,15 @@ public sealed class EClinicalWorksPluginTests
             CancellationToken.None);
 
         Assert.Equal(PollDisposition.Running, result.Disposition);
+        Assert.Equal("Searched 259290 of 256811 patients", result.Progress);
+        var exchange = Assert.Single(result.HttpExchanges!);
+        Assert.Contains(exchange.ResponseHeaders, header =>
+            header.Name.Equals("X-Progress", StringComparison.OrdinalIgnoreCase) &&
+            header.Values.Contains("Searched 259290 of 256811 patients"));
+        var authorization = Assert.Single(
+            exchange.RequestHeaders,
+            header => header.Name.Equals("Authorization", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("[REDACTED]", Assert.Single(authorization.Values));
     }
 
     private static Dictionary<string, string> ParseForm(string body) =>

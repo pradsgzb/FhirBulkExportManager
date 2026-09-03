@@ -17,7 +17,7 @@ public sealed class AuthenticationTokenProvider(
     {
         if (cache.TryGetValue(job.CredentialProfileId, out var existing) && !existing.NeedsRefresh(timeProvider.GetUtcNow(), TimeSpan.FromMinutes(1)))
         {
-            return existing;
+            return existing with { HttpExchanges = null };
         }
 
         var gate = locks.GetOrAdd(job.CredentialProfileId, static _ => new SemaphoreSlim(1, 1));
@@ -26,7 +26,7 @@ public sealed class AuthenticationTokenProvider(
         {
             if (cache.TryGetValue(job.CredentialProfileId, out existing) && !existing.NeedsRefresh(timeProvider.GetUtcNow(), TimeSpan.FromMinutes(1)))
             {
-                return existing;
+                return existing with { HttpExchanges = null };
             }
 
             var profile = await configurationStore.GetCredentialProfileAsync(job.CredentialProfileId, cancellationToken).ConfigureAwait(false)
@@ -47,7 +47,7 @@ public sealed class AuthenticationTokenProvider(
                 profile.AdditionalConfigurationJson,
                 new SecretMaterial(clientSecret, new Dictionary<string, string>(StringComparer.Ordinal)));
             var token = await plugin.AuthenticateAsync(context, timeProvider, cancellationToken).ConfigureAwait(false);
-            cache[job.CredentialProfileId] = token;
+            cache[job.CredentialProfileId] = token with { HttpExchanges = null };
             return token;
         }
         finally

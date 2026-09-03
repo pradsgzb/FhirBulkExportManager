@@ -170,7 +170,7 @@ public sealed class ExportJob
         Version++;
     }
 
-    public void ConfirmRemoteJob(string exactContentLocation, DateTimeOffset now, DateTimeOffset? nextPollAtUtc)
+    public void ConfirmRemoteJob(string exactContentLocation, DateTimeOffset now, DateTimeOffset? nextPollAtUtc, string? progress = null)
     {
         if (!Uri.TryCreate(exactContentLocation, UriKind.Absolute, out _))
         {
@@ -180,6 +180,10 @@ public sealed class ExportJob
         RemoteStatusUrl = exactContentLocation;
         StartedAtUtc ??= now;
         NextPollAtUtc = nextPollAtUtc;
+        if (!string.IsNullOrWhiteSpace(progress))
+        {
+            ProgressText = progress;
+        }
         Version++;
     }
 
@@ -192,6 +196,20 @@ public sealed class ExportJob
 
         LastPolledAtUtc = now;
         NextPollAtUtc = nextPollAtUtc;
+        if (!string.IsNullOrWhiteSpace(progress))
+        {
+            ProgressText = progress;
+        }
+        Version++;
+    }
+
+    public void RecordRemoteProgress(string? progress)
+    {
+        if (string.IsNullOrWhiteSpace(progress))
+        {
+            return;
+        }
+
         ProgressText = progress;
         Version++;
     }

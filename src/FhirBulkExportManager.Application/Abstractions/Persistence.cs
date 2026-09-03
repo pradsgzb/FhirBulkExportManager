@@ -34,6 +34,8 @@ public interface IExportStore
 
     Task UpdateFileAsync(ExportFile file, long expectedVersion, CancellationToken cancellationToken);
 
+    Task AddJobEventAsync(ExportJobEvent jobEvent, CancellationToken cancellationToken);
+
     Task<IReadOnlyList<ExportJobEvent>> GetTimelineAsync(Guid jobId, CancellationToken cancellationToken);
 
     Task<bool> TryAcquireLeaseAsync(Guid jobId, string owner, DateTimeOffset now, TimeSpan duration, CancellationToken cancellationToken);

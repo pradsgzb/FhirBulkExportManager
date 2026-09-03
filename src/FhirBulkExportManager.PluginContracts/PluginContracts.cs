@@ -24,9 +24,80 @@ public sealed record AuthenticationContext(
     string AdditionalConfigurationJson,
     SecretMaterial Secrets);
 
-public sealed record AccessToken(string Value, DateTimeOffset ExpiresAtUtc, string TokenType = "Bearer")
+public sealed record HttpHeaderContract(string Name, IReadOnlyList<string> Values);
+
+public sealed record HttpExchangeContract(
+    string Operation,
+    DateTimeOffset StartedAtUtc,
+    DateTimeOffset CompletedAtUtc,
+    string RequestMethod,
+    string RequestUri,
+    IReadOnlyList<HttpHeaderContract> RequestHeaders,
+    string? RequestBody,
+    int? ResponseStatusCode,
+    string? ResponseReasonPhrase,
+    IReadOnlyList<HttpHeaderContract> ResponseHeaders,
+    string? ResponseBody,
+    string? ResponseBodyStorageReference = null,
+    string? Failure = null);
+
+public sealed record JobEventMetadataContract(
+    string? Progress,
+    IReadOnlyList<HttpExchangeContract> HttpExchanges);
+
+[System.Diagnostics.CodeAnalysis.SuppressMessage(
+    "Design",
+    "CA1032:Implement standard exception constructors",
+    Justification = "The exchange-aware overload is required; legacy exception serialization is intentionally unsupported.")]
+public sealed class RecordedHttpExchangeException : HttpRequestException
 {
+    public RecordedHttpExchangeException()
+        : this("An HTTP exchange failed.")
+    {
+    }
+
+    public RecordedHttpExchangeException(string message)
+        : this(message, null, [])
+    {
+    }
+
+    public RecordedHttpExchangeException(string message, Exception innerException)
+        : this(message, null, [], innerException)
+    {
+    }
+
+    public RecordedHttpExchangeException(
+        string message,
+        HttpStatusCode? statusCode,
+        IReadOnlyList<HttpExchangeContract> httpExchanges,
+        Exception? innerException = null)
+        : base(message, innerException, statusCode)
+    {
+        HttpExchanges = httpExchanges;
+    }
+
+    public IReadOnlyList<HttpExchangeContract> HttpExchanges { get; }
+}
+
+public sealed record AccessToken(
+    string Value,
+    DateTimeOffset ExpiresAtUtc,
+    string TokenType = "Bearer",
+    IReadOnlyList<HttpExchangeContract>? HttpExchanges = null)
+{
+    public AccessToken(string value, DateTimeOffset expiresAtUtc, string tokenType)
+        : this(value, expiresAtUtc, tokenType, null)
+    {
+    }
+
     public bool NeedsRefresh(DateTimeOffset now, TimeSpan skew) => ExpiresAtUtc <= now.Add(skew);
+
+    public void Deconstruct(out string value, out DateTimeOffset expiresAtUtc, out string tokenType)
+    {
+        value = Value;
+        expiresAtUtc = ExpiresAtUtc;
+        tokenType = TokenType;
+    }
 }
 
 public sealed record VendorSiteContext(
@@ -74,7 +145,45 @@ public sealed record KickoffResult(
     string? Progress,
     string? OperationOutcomeJson,
     string? ErrorCode,
-    string? SafeErrorMessage);
+    string? SafeErrorMessage,
+    IReadOnlyList<HttpExchangeContract>? HttpExchanges = null)
+{
+    public KickoffResult(
+        KickoffDisposition disposition,
+        HttpStatusCode? statusCode,
+        Uri? exactContentLocation,
+        DateTimeOffset? retryAtUtc,
+        string requestUri,
+        string? progress,
+        string? operationOutcomeJson,
+        string? errorCode,
+        string? safeErrorMessage)
+        : this(disposition, statusCode, exactContentLocation, retryAtUtc, requestUri, progress, operationOutcomeJson, errorCode, safeErrorMessage, null)
+    {
+    }
+
+    public void Deconstruct(
+        out KickoffDisposition disposition,
+        out HttpStatusCode? statusCode,
+        out Uri? exactContentLocation,
+        out DateTimeOffset? retryAtUtc,
+        out string requestUri,
+        out string? progress,
+        out string? operationOutcomeJson,
+        out string? errorCode,
+        out string? safeErrorMessage)
+    {
+        disposition = Disposition;
+        statusCode = StatusCode;
+        exactContentLocation = ExactContentLocation;
+        retryAtUtc = RetryAtUtc;
+        requestUri = RequestUri;
+        progress = Progress;
+        operationOutcomeJson = OperationOutcomeJson;
+        errorCode = ErrorCode;
+        safeErrorMessage = SafeErrorMessage;
+    }
+}
 
 public enum PollDisposition
 {
@@ -97,7 +206,42 @@ public sealed record PollResult(
     string? ExactManifestJson,
     string? OperationOutcomeJson,
     string? ErrorCode,
-    string? SafeErrorMessage);
+    string? SafeErrorMessage,
+    IReadOnlyList<HttpExchangeContract>? HttpExchanges = null)
+{
+    public PollResult(
+        PollDisposition disposition,
+        HttpStatusCode statusCode,
+        DateTimeOffset? retryAtUtc,
+        string? progress,
+        string? exactManifestJson,
+        string? operationOutcomeJson,
+        string? errorCode,
+        string? safeErrorMessage)
+        : this(disposition, statusCode, retryAtUtc, progress, exactManifestJson, operationOutcomeJson, errorCode, safeErrorMessage, null)
+    {
+    }
+
+    public void Deconstruct(
+        out PollDisposition disposition,
+        out HttpStatusCode statusCode,
+        out DateTimeOffset? retryAtUtc,
+        out string? progress,
+        out string? exactManifestJson,
+        out string? operationOutcomeJson,
+        out string? errorCode,
+        out string? safeErrorMessage)
+    {
+        disposition = Disposition;
+        statusCode = StatusCode;
+        retryAtUtc = RetryAtUtc;
+        progress = Progress;
+        exactManifestJson = ExactManifestJson;
+        operationOutcomeJson = OperationOutcomeJson;
+        errorCode = ErrorCode;
+        safeErrorMessage = SafeErrorMessage;
+    }
+}
 
 public enum ManifestFileCategory
 {
@@ -123,7 +267,30 @@ public sealed record ConnectionTestResult(
     bool Succeeded,
     HttpStatusCode? StatusCode,
     string Summary,
-    string? SanitizedCapabilityStatementJson);
+    string? SanitizedCapabilityStatementJson,
+    IReadOnlyList<HttpExchangeContract>? HttpExchanges = null)
+{
+    public ConnectionTestResult(
+        bool succeeded,
+        HttpStatusCode? statusCode,
+        string summary,
+        string? sanitizedCapabilityStatementJson)
+        : this(succeeded, statusCode, summary, sanitizedCapabilityStatementJson, null)
+    {
+    }
+
+    public void Deconstruct(
+        out bool succeeded,
+        out HttpStatusCode? statusCode,
+        out string summary,
+        out string? sanitizedCapabilityStatementJson)
+    {
+        succeeded = Succeeded;
+        statusCode = StatusCode;
+        summary = Summary;
+        sanitizedCapabilityStatementJson = SanitizedCapabilityStatementJson;
+    }
+}
 
 public enum CleanupVerificationDisposition
 {
@@ -133,9 +300,51 @@ public enum CleanupVerificationDisposition
     Unknown,
 }
 
-public sealed record CleanupResult(bool Succeeded, HttpStatusCode StatusCode, DateTimeOffset? RetryAtUtc, string? SafeMessage);
+public sealed record CleanupResult(
+    bool Succeeded,
+    HttpStatusCode StatusCode,
+    DateTimeOffset? RetryAtUtc,
+    string? SafeMessage,
+    IReadOnlyList<HttpExchangeContract>? HttpExchanges = null)
+{
+    public CleanupResult(bool succeeded, HttpStatusCode statusCode, DateTimeOffset? retryAtUtc, string? safeMessage)
+        : this(succeeded, statusCode, retryAtUtc, safeMessage, null)
+    {
+    }
 
-public sealed record CleanupVerificationResult(CleanupVerificationDisposition Disposition, HttpStatusCode StatusCode, DateTimeOffset? RetryAtUtc);
+    public void Deconstruct(out bool succeeded, out HttpStatusCode statusCode, out DateTimeOffset? retryAtUtc, out string? safeMessage)
+    {
+        succeeded = Succeeded;
+        statusCode = StatusCode;
+        retryAtUtc = RetryAtUtc;
+        safeMessage = SafeMessage;
+    }
+}
+
+public sealed record CleanupVerificationResult(
+    CleanupVerificationDisposition Disposition,
+    HttpStatusCode StatusCode,
+    DateTimeOffset? RetryAtUtc,
+    IReadOnlyList<HttpExchangeContract>? HttpExchanges = null)
+{
+    public CleanupVerificationResult(
+        CleanupVerificationDisposition disposition,
+        HttpStatusCode statusCode,
+        DateTimeOffset? retryAtUtc)
+        : this(disposition, statusCode, retryAtUtc, null)
+    {
+    }
+
+    public void Deconstruct(
+        out CleanupVerificationDisposition disposition,
+        out HttpStatusCode statusCode,
+        out DateTimeOffset? retryAtUtc)
+    {
+        disposition = Disposition;
+        statusCode = StatusCode;
+        retryAtUtc = RetryAtUtc;
+    }
+}
 
 public interface IVendorPlugin
 {

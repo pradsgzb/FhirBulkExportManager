@@ -96,8 +96,19 @@ public sealed class ExportJobProcessor(
         var plugin = pluginCatalog.GetRequired(job.PluginId, job.PluginVersion);
         try
         {
-            _ = await tokenProvider.GetAsync(job, plugin, cancellationToken).ConfigureAwait(false);
-            await TransitionAsync(job, ExportJobState.Starting, "AuthenticationSucceeded", "Authentication succeeded; kickoff is ready.", cancellationToken).ConfigureAwait(false);
+            var token = await tokenProvider.GetAsync(job, plugin, cancellationToken).ConfigureAwait(false);
+            await TransitionAsync(
+                job,
+                ExportJobState.Starting,
+                "AuthenticationSucceeded",
+                "Authentication succeeded; kickoff is ready.",
+                cancellationToken,
+                httpExchanges: token.HttpExchanges).ConfigureAwait(false);
+        }
+        catch (RecordedHttpExchangeException exception)
+        {
+            var transient = exception.StatusCode is null or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests || (int?)exception.StatusCode >= 500;
+            await FailOrRetryAsync(job, transient, "AuthenticationFailed", exception.Message, cancellationToken, httpExchanges: exception.HttpExchanges).ConfigureAwait(false);
         }
         catch (HttpRequestException exception)
         {
@@ -144,24 +155,28 @@ public sealed class ExportJobProcessor(
             siteResilienceGate.ReportSuccess(job.SiteId);
         }
         var expected = job.Version;
+        if (result.Disposition != KickoffDisposition.Accepted)
+        {
+            job.RecordRemoteProgress(result.Progress);
+        }
         switch (result.Disposition)
         {
             case KickoffDisposition.Accepted when result.ExactContentLocation is not null:
-                job.ConfirmRemoteJob(result.ExactContentLocation.AbsoluteUri, timeProvider.GetUtcNow(), result.RetryAtUtc ?? DefaultPollAt(job.RetryCount));
-                await PersistTransitionAsync(job, expected, ExportJobState.WaitingForPoll, "RemoteExportAccepted", "Remote export accepted and exact Content-Location committed.", request.CorrelationId, cancellationToken).ConfigureAwait(false);
+                job.ConfirmRemoteJob(result.ExactContentLocation.AbsoluteUri, timeProvider.GetUtcNow(), result.RetryAtUtc ?? DefaultPollAt(job.RetryCount), result.Progress);
+                await PersistTransitionAsync(job, expected, ExportJobState.WaitingForPoll, "RemoteExportAccepted", "Remote export accepted and exact Content-Location committed.", request.CorrelationId, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
             case KickoffDisposition.Ambiguous:
                 job.RecordFailure(result.ErrorCode ?? "AmbiguousKickoff", result.SafeErrorMessage ?? "Remote acceptance is unknown.", incrementRetry: false);
-                await PersistTransitionAsync(job, expected, ExportJobState.Unknown, "KickoffOutcomeUnknown", "Automatic retries are blocked to avoid creating a duplicate remote export.", request.CorrelationId, cancellationToken).ConfigureAwait(false);
+                await PersistTransitionAsync(job, expected, ExportJobState.Unknown, "KickoffOutcomeUnknown", "Automatic retries are blocked to avoid creating a duplicate remote export.", request.CorrelationId, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
             case KickoffDisposition.RetryLater:
                 job.ClearKickoffJournalAfterConfirmedRejection();
                 job.ScheduleRetry(result.RetryAtUtc ?? DefaultPollAt(job.RetryCount), result.ErrorCode ?? "KickoffRetry", result.SafeErrorMessage ?? "Remote server requested retry.");
-                await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "KickoffRetryScheduled", "Server explicitly did not accept kickoff; a bounded retry was scheduled.", request.CorrelationId, cancellationToken).ConfigureAwait(false);
+                await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "KickoffRetryScheduled", "Server explicitly did not accept kickoff; a bounded retry was scheduled.", request.CorrelationId, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
             default:
                 job.RecordFailure(result.ErrorCode ?? "KickoffRejected", result.SafeErrorMessage ?? "Kickoff was rejected.", incrementRetry: false);
-                await PersistTransitionAsync(job, expected, ExportJobState.FailedPermanent, "KickoffRejected", "Remote export kickoff was rejected.", request.CorrelationId, cancellationToken).ConfigureAwait(false);
+                await PersistTransitionAsync(job, expected, ExportJobState.FailedPermanent, "KickoffRejected", "Remote export kickoff was rejected.", request.CorrelationId, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
         }
     }
@@ -192,41 +207,55 @@ public sealed class ExportJobProcessor(
         var expected = job.Version;
         var operation = Guid.NewGuid();
         var correlation = operation.ToString("N");
+        if (result.Disposition is not (PollDisposition.Running or PollDisposition.Complete))
+        {
+            job.RecordRemoteProgress(result.Progress);
+        }
         switch (result.Disposition)
         {
             case PollDisposition.Running:
                 job.RecordPoll(timeProvider.GetUtcNow(), result.RetryAtUtc ?? DefaultPollAt(job.RetryCount), result.Progress);
-                await PersistTransitionAsync(job, expected, ExportJobState.WaitingForPoll, "RemoteExportRunning", "Remote export is still processing.", correlation, cancellationToken).ConfigureAwait(false);
+                await PersistTransitionAsync(job, expected, ExportJobState.WaitingForPoll, "RemoteExportRunning", "Remote export is still processing.", correlation, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
             case PollDisposition.Complete when result.ExactManifestJson is not null:
-                await SaveManifestAsync(job, plugin, result.ExactManifestJson, expected, correlation, cancellationToken).ConfigureAwait(false);
+                job.RecordPoll(timeProvider.GetUtcNow(), nextPollAtUtc: null, progress: result.Progress);
+                await SaveManifestAsync(job, plugin, result.ExactManifestJson, expected, correlation, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
             case PollDisposition.AuthenticationRequired:
                 tokenProvider.Invalidate(job.CredentialProfileId);
                 job.ScheduleRetry(timeProvider.GetUtcNow(), "AuthenticationRefreshRequired", result.SafeErrorMessage ?? "Access token expired.");
-                await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "AuthenticationRefreshScheduled", "Access token will be reacquired before polling.", correlation, cancellationToken).ConfigureAwait(false);
+                await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "AuthenticationRefreshScheduled", "Access token will be reacquired before polling.", correlation, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
             case PollDisposition.RetryLater:
                 job.ScheduleRetry(result.RetryAtUtc ?? DefaultPollAt(job.RetryCount), result.ErrorCode ?? "PollRetry", result.SafeErrorMessage ?? "Status check will be retried.");
-                await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "PollRetryScheduled", "A bounded status retry was scheduled.", correlation, cancellationToken).ConfigureAwait(false);
+                await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "PollRetryScheduled", "A bounded status retry was scheduled.", correlation, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
+            case PollDisposition.Expired:
             case PollDisposition.NotFound:
                 job.RecordFailure("RemoteNotFound", result.SafeErrorMessage ?? "Remote job no longer exists.", incrementRetry: false);
-                await PersistTransitionAsync(job, expected, ExportJobState.Expired, "RemoteExportExpired", "Remote status URL returned 404 before local completion.", correlation, cancellationToken).ConfigureAwait(false);
+                await PersistTransitionAsync(job, expected, ExportJobState.Expired, "RemoteExportExpired", "Remote status URL expired or was not found before local completion.", correlation, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
             case PollDisposition.AuthorizationDenied:
             case PollDisposition.FailedPermanent:
                 job.RecordFailure(result.ErrorCode ?? "RemotePermanent", result.SafeErrorMessage ?? "Status request failed permanently.", incrementRetry: false);
-                await PersistTransitionAsync(job, expected, ExportJobState.FailedPermanent, "RemoteStatusFailed", "Remote status request cannot continue automatically.", correlation, cancellationToken).ConfigureAwait(false);
+                await PersistTransitionAsync(job, expected, ExportJobState.FailedPermanent, "RemoteStatusFailed", "Remote status request cannot continue automatically.", correlation, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
             default:
                 job.RecordFailure(result.ErrorCode ?? "UnknownRemoteState", result.SafeErrorMessage ?? "Remote state cannot be determined.", incrementRetry: false);
-                await PersistTransitionAsync(job, expected, ExportJobState.Unknown, "RemoteStateUnknown", "Operator reconciliation is required.", correlation, cancellationToken).ConfigureAwait(false);
+                await PersistTransitionAsync(job, expected, ExportJobState.Unknown, "RemoteStateUnknown", "Operator reconciliation is required.", correlation, cancellationToken, result.Progress, result.HttpExchanges).ConfigureAwait(false);
                 break;
         }
     }
 
-    private async Task SaveManifestAsync(ExportJob job, IVendorPlugin plugin, string exactJson, long expectedVersion, string correlationId, CancellationToken cancellationToken)
+    private async Task SaveManifestAsync(
+        ExportJob job,
+        IVendorPlugin plugin,
+        string exactJson,
+        long expectedVersion,
+        string correlationId,
+        CancellationToken cancellationToken,
+        string? progress = null,
+        IReadOnlyList<HttpExchangeContract>? httpExchanges = null)
     {
         var normalized = plugin.NormalizeManifest(exactJson);
         var vendor = await configurationStore.GetVendorAsync(job.VendorId, cancellationToken).ConfigureAwait(false)
@@ -262,7 +291,8 @@ public sealed class ExportJobProcessor(
             files.Count(x => x.Category == ExportFileCategory.Error),
             now);
         var operation = Guid.NewGuid();
-        var jobEvent = job.Transition(ExportJobState.ManifestReady, now, "ManifestPersisted", "Completion manifest and all file entries were persisted.", operation, correlationId);
+        var metadata = BuildEventMetadata(progress, httpExchanges);
+        var jobEvent = job.Transition(ExportJobState.ManifestReady, now, "ManifestPersisted", "Completion manifest and all file entries were persisted.", operation, correlationId, metadata);
         await exportStore.SaveManifestAsync(job, jobEvent, files, Audit(job, "ManifestPersisted", "Succeeded", correlationId), expectedVersion, cancellationToken).ConfigureAwait(false);
     }
 
@@ -402,28 +432,29 @@ public sealed class ExportJobProcessor(
         if (!cleanup.Succeeded)
         {
             siteResilienceGate.ReportTransientFailure(job.SiteId, cleanup.RetryAtUtc);
-            await ScheduleRetryAsync(job, cleanup.RetryAtUtc, "CleanupRetry", cleanup.SafeMessage ?? "Remote cleanup failed transiently.", cancellationToken).ConfigureAwait(false);
+            await ScheduleRetryAsync(job, cleanup.RetryAtUtc, "CleanupRetry", cleanup.SafeMessage ?? "Remote cleanup failed transiently.", cancellationToken, httpExchanges: cleanup.HttpExchanges).ConfigureAwait(false);
             return;
         }
 
         var verification = await plugin.VerifyCleanupAsync(exactStatus, site, token, timeProvider, cancellationToken).ConfigureAwait(false);
+        var cleanupExchanges = CombineHttpExchanges(cleanup.HttpExchanges, verification.HttpExchanges);
         if (verification.Disposition == CleanupVerificationDisposition.VerifiedDeleted)
         {
             siteResilienceGate.ReportSuccess(job.SiteId);
             var expected = job.Version;
             job.MarkCleanupVerified();
-            await PersistTransitionAsync(job, expected, ExportJobState.Completed, "RemoteCleanupVerified", "Remote status URL returned 404; cleanup is verified.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
+            await PersistTransitionAsync(job, expected, ExportJobState.Completed, "RemoteCleanupVerified", "Remote status URL returned 404; cleanup is verified.", Guid.NewGuid().ToString("N"), cancellationToken, httpExchanges: cleanupExchanges).ConfigureAwait(false);
         }
         else if (verification.Disposition is CleanupVerificationDisposition.StillPresent or CleanupVerificationDisposition.RetryLater)
         {
             siteResilienceGate.ReportTransientFailure(job.SiteId, verification.RetryAtUtc);
-            await ScheduleRetryAsync(job, verification.RetryAtUtc, "CleanupVerificationRetry", "Remote cleanup has not yet been verified.", cancellationToken).ConfigureAwait(false);
+            await ScheduleRetryAsync(job, verification.RetryAtUtc, "CleanupVerificationRetry", "Remote cleanup has not yet been verified.", cancellationToken, httpExchanges: cleanupExchanges).ConfigureAwait(false);
         }
         else
         {
             var expected = job.Version;
             job.RecordFailure("CleanupVerificationUnknown", "Cleanup response could not be interpreted safely.", incrementRetry: false);
-            await PersistTransitionAsync(job, expected, ExportJobState.HeldForReview, "CleanupVerificationUnknown", "Local export remains valid; operator review is required before another cleanup attempt.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
+            await PersistTransitionAsync(job, expected, ExportJobState.HeldForReview, "CleanupVerificationUnknown", "Local export remains valid; operator review is required before another cleanup attempt.", Guid.NewGuid().ToString("N"), cancellationToken, httpExchanges: cleanupExchanges).ConfigureAwait(false);
         }
     }
 
@@ -445,12 +476,12 @@ public sealed class ExportJobProcessor(
         if (result.Succeeded)
         {
             siteResilienceGate.ReportSuccess(job.SiteId);
-            await TransitionAsync(job, ExportJobState.Cancelled, "RemoteExportCancelled", "Remote DELETE request was accepted or the job was already absent.", cancellationToken).ConfigureAwait(false);
+            await TransitionAsync(job, ExportJobState.Cancelled, "RemoteExportCancelled", "Remote DELETE request was accepted or the job was already absent.", cancellationToken, httpExchanges: result.HttpExchanges).ConfigureAwait(false);
         }
         else
         {
             siteResilienceGate.ReportTransientFailure(job.SiteId, result.RetryAtUtc);
-            await ScheduleRetryAsync(job, result.RetryAtUtc, "CancelRetry", result.SafeMessage ?? "Remote cancellation failed transiently.", cancellationToken).ConfigureAwait(false);
+            await ScheduleRetryAsync(job, result.RetryAtUtc, "CancelRetry", result.SafeMessage ?? "Remote cancellation failed transiently.", cancellationToken, httpExchanges: result.HttpExchanges).ConfigureAwait(false);
         }
     }
 
@@ -481,40 +512,88 @@ public sealed class ExportJobProcessor(
         await TransitionAsync(job, target, "RetryActivated", "Scheduled retry became due.", cancellationToken).ConfigureAwait(false);
     }
 
-    private async Task ScheduleRetryAsync(ExportJob job, DateTimeOffset? retryAt, string code, string message, CancellationToken cancellationToken)
+    private async Task ScheduleRetryAsync(
+        ExportJob job,
+        DateTimeOffset? retryAt,
+        string code,
+        string message,
+        CancellationToken cancellationToken,
+        string? progress = null,
+        IReadOnlyList<HttpExchangeContract>? httpExchanges = null)
     {
         var expected = job.Version;
         job.ScheduleRetry(retryAt ?? DefaultPollAt(job.RetryCount), code, message);
-        await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "RetryScheduled", "A bounded retry was scheduled without changing local data integrity.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
+        await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "RetryScheduled", "A bounded retry was scheduled without changing local data integrity.", Guid.NewGuid().ToString("N"), cancellationToken, progress, httpExchanges).ConfigureAwait(false);
     }
 
-    private async Task FailOrRetryAsync(ExportJob job, bool transient, string code, string message, CancellationToken cancellationToken)
+    private async Task FailOrRetryAsync(
+        ExportJob job,
+        bool transient,
+        string code,
+        string message,
+        CancellationToken cancellationToken,
+        string? progress = null,
+        IReadOnlyList<HttpExchangeContract>? httpExchanges = null)
     {
         var expected = job.Version;
         if (transient && job.RetryCount < 5)
         {
             job.ScheduleRetry(DefaultPollAt(job.RetryCount), code, message);
-            await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "TransientFailure", "Transient failure was scheduled for retry.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
+            await PersistTransitionAsync(job, expected, ExportJobState.RetryPending, "TransientFailure", "Transient failure was scheduled for retry.", Guid.NewGuid().ToString("N"), cancellationToken, progress, httpExchanges).ConfigureAwait(false);
         }
         else
         {
             job.RecordFailure(code, message, incrementRetry: false);
-            await PersistTransitionAsync(job, expected, ExportJobState.FailedPermanent, "PermanentFailure", "Operation cannot continue automatically.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
+            await PersistTransitionAsync(job, expected, ExportJobState.FailedPermanent, "PermanentFailure", "Operation cannot continue automatically.", Guid.NewGuid().ToString("N"), cancellationToken, progress, httpExchanges).ConfigureAwait(false);
         }
     }
 
-    private async Task TransitionAsync(ExportJob job, ExportJobState target, string eventType, string message, CancellationToken cancellationToken)
+    private async Task TransitionAsync(
+        ExportJob job,
+        ExportJobState target,
+        string eventType,
+        string message,
+        CancellationToken cancellationToken,
+        string? progress = null,
+        IReadOnlyList<HttpExchangeContract>? httpExchanges = null)
     {
         var expected = job.Version;
-        await PersistTransitionAsync(job, expected, target, eventType, message, Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
+        await PersistTransitionAsync(job, expected, target, eventType, message, Guid.NewGuid().ToString("N"), cancellationToken, progress, httpExchanges).ConfigureAwait(false);
     }
 
-    private async Task PersistTransitionAsync(ExportJob job, long expectedVersion, ExportJobState target, string eventType, string message, string correlationId, CancellationToken cancellationToken)
+    private async Task PersistTransitionAsync(
+        ExportJob job,
+        long expectedVersion,
+        ExportJobState target,
+        string eventType,
+        string message,
+        string correlationId,
+        CancellationToken cancellationToken,
+        string? progress = null,
+        IReadOnlyList<HttpExchangeContract>? httpExchanges = null)
     {
         var operation = Guid.NewGuid();
-        var evt = job.Transition(target, timeProvider.GetUtcNow(), eventType, message, operation, correlationId);
+        var metadata = BuildEventMetadata(progress, httpExchanges);
+        var evt = job.Transition(target, timeProvider.GetUtcNow(), eventType, message, operation, correlationId, metadata);
         await exportStore.UpdateJobAsync(job, evt, Audit(job, eventType, "Succeeded", correlationId), expectedVersion, cancellationToken).ConfigureAwait(false);
     }
+
+    private static string BuildEventMetadata(string? progress, IReadOnlyList<HttpExchangeContract>? httpExchanges)
+    {
+        if (string.IsNullOrWhiteSpace(progress) && httpExchanges is not { Count: > 0 })
+        {
+            return "{}";
+        }
+
+        return JsonSerializer.Serialize(
+            new JobEventMetadataContract(progress, httpExchanges ?? []),
+            JsonDefaults.Options);
+    }
+
+    private static IReadOnlyList<HttpExchangeContract> CombineHttpExchanges(
+        IReadOnlyList<HttpExchangeContract>? first,
+        IReadOnlyList<HttpExchangeContract>? second) =>
+        (first ?? []).Concat(second ?? []).ToArray();
 
     private async Task RecordUnexpectedFailureAsync(Guid jobId, Exception exception, CancellationToken cancellationToken)
     {

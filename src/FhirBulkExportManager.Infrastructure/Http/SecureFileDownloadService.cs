@@ -36,22 +36,48 @@ public sealed class SecureFileDownloadService(IHttpClientFactory httpClientFacto
             canResume ? partialLength : null,
             etag,
             canResume ? file.LastModifiedUtc : null);
-        using var response = await SendWithSecureRedirectsAsync(request, cancellationToken).ConfigureAwait(false);
+        using var downloadResponse = await SendWithSecureRedirectsAsync(request, cancellationToken).ConfigureAwait(false);
+        var response = downloadResponse.Response;
+
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorBody = await ReadRedirectBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            var message = $"FHIR file download returned {(int)response.StatusCode} {response.ReasonPhrase}.";
+            var failedExchanges = downloadResponse.RedirectExchanges
+                .Append(HttpExchangeCapture.Create(
+                    "FHIR file download",
+                    downloadResponse.StartedAtUtc,
+                    DateTimeOffset.UtcNow,
+                    downloadResponse.Request,
+                    response,
+                    responseBody: errorBody,
+                    failure: message))
+                .ToArray();
+            if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
+            {
+                File.Delete(partialPath);
+            }
+
+            throw new RecordedHttpExchangeException(message, response.StatusCode, failedExchanges);
+        }
 
         var resumed = canResume && response.StatusCode == HttpStatusCode.PartialContent;
         if (resumed && response.Content.Headers.ContentRange?.From != partialLength)
         {
+            var message = "Server returned a Content-Range that does not match the local partial file.";
             File.Delete(partialPath);
-            throw new IOException("Server returned a Content-Range that does not match the local partial file.");
+            var failedExchanges = downloadResponse.RedirectExchanges
+                .Append(HttpExchangeCapture.Create(
+                    "FHIR file download",
+                    downloadResponse.StartedAtUtc,
+                    DateTimeOffset.UtcNow,
+                    downloadResponse.Request,
+                    response,
+                    failure: message))
+                .ToArray();
+            throw new RecordedHttpExchangeException(message, response.StatusCode, failedExchanges);
         }
 
-        if (response.StatusCode == HttpStatusCode.RequestedRangeNotSatisfiable)
-        {
-            File.Delete(partialPath);
-            throw new IOException("Server rejected the requested safe download range; the file will be restarted on retry.");
-        }
-
-        response.EnsureSuccessStatusCode();
         var mode = resumed ? FileMode.Append : FileMode.Create;
         var expectedTotal = response.Content.Headers.ContentRange?.Length ??
             (response.Content.Headers.ContentLength is { } length ? length + (resumed ? partialLength : 0) : (long?)null);
@@ -76,71 +102,151 @@ public sealed class SecureFileDownloadService(IHttpClientFactory httpClientFacto
         var actualBytes = new FileInfo(partialPath).Length;
         if (expectedTotal is { } expected && actualBytes != expected)
         {
-            throw new IOException($"Truncated download: received {actualBytes} bytes; expected {expected} bytes.");
+            var message = $"Truncated download: received {actualBytes} bytes; expected {expected} bytes.";
+            var failedExchanges = downloadResponse.RedirectExchanges
+                .Append(HttpExchangeCapture.Create(
+                    "FHIR file download",
+                    downloadResponse.StartedAtUtc,
+                    DateTimeOffset.UtcNow,
+                    downloadResponse.Request,
+                    response,
+                    responseBodyStorageReference: partialPath,
+                    failure: message))
+                .ToArray();
+            throw new RecordedHttpExchangeException(message, response.StatusCode, failedExchanges);
         }
 
         var sha256 = await HashUtility.Sha256FileAsync(partialPath, cancellationToken).ConfigureAwait(false);
+        var exchanges = downloadResponse.RedirectExchanges
+            .Append(HttpExchangeCapture.Create(
+                "FHIR file download",
+                downloadResponse.StartedAtUtc,
+                DateTimeOffset.UtcNow,
+                downloadResponse.Request,
+                response,
+                responseBodyStorageReference: finalPath))
+            .ToArray();
         return new DownloadExecutionResult(
             actualBytes,
             sha256,
             partialPath,
             response.Headers.ETag?.ToString(),
             response.Content.Headers.LastModified,
-            resumed);
+            resumed,
+            exchanges);
     }
 
-    private async Task<HttpResponseMessage> SendWithSecureRedirectsAsync(HttpRequestMessage initialRequest, CancellationToken cancellationToken)
+    private async Task<CapturedDownloadResponse> SendWithSecureRedirectsAsync(
+        HttpRequestMessage initialRequest,
+        CancellationToken cancellationToken)
     {
         var client = httpClientFactory.CreateClient("FhirDownloads");
         HttpRequestMessage current = initialRequest;
         var ownsCurrent = false;
+        var exchanges = new List<HttpExchangeContract>();
         try
         {
             for (var redirect = 0; redirect <= MaximumRedirects; redirect++)
             {
-                EnsureSecureTransport(current.RequestUri ?? throw new InvalidOperationException("Download request URI is missing."));
-                var response = await client.SendAsync(current, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                var startedAtUtc = DateTimeOffset.UtcNow;
+                try
+                {
+                    EnsureSecureTransport(current.RequestUri ?? throw new InvalidOperationException("Download request URI is missing."));
+                }
+                catch (InvalidOperationException exception)
+                {
+                    exchanges.Add(HttpExchangeCapture.Create(
+                        "FHIR file download blocked",
+                        startedAtUtc,
+                        DateTimeOffset.UtcNow,
+                        current,
+                        failure: exception.Message));
+                    throw new RecordedHttpExchangeException(exception.Message, null, exchanges.ToArray(), exception);
+                }
+
+                HttpResponseMessage response;
+                try
+                {
+                    response = await client.SendAsync(current, HttpCompletionOption.ResponseHeadersRead, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception exception) when (exception is HttpRequestException or OperationCanceledException)
+                {
+                    exchanges.Add(HttpExchangeCapture.Create(
+                        "FHIR file download",
+                        startedAtUtc,
+                        DateTimeOffset.UtcNow,
+                        current,
+                        failure: exception.Message));
+                    throw new RecordedHttpExchangeException(
+                        SecurityRedactor.Redact(exception.Message),
+                        (exception as HttpRequestException)?.StatusCode,
+                        exchanges.ToArray(),
+                        exception);
+                }
+
                 if (!IsRedirect(response.StatusCode) || response.Headers.Location is null)
                 {
+                    return new CapturedDownloadResponse(
+                        response,
+                        current,
+                        ownsCurrent,
+                        startedAtUtc,
+                        exchanges.ToArray());
+                }
+
+                using (response)
+                {
+                    var redirectBody = await ReadRedirectBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+                    exchanges.Add(HttpExchangeCapture.Create(
+                        "FHIR download redirect",
+                        startedAtUtc,
+                        DateTimeOffset.UtcNow,
+                        current,
+                        response,
+                        responseBody: redirectBody));
+
+                    if (redirect == MaximumRedirects)
+                    {
+                        throw new RecordedHttpExchangeException("Maximum safe redirect count exceeded.", response.StatusCode, exchanges.ToArray());
+                    }
+
+                    var nextUri = response.Headers.Location.IsAbsoluteUri
+                        ? response.Headers.Location
+                        : new Uri(current.RequestUri!, response.Headers.Location);
+                    try
+                    {
+                        EnsureSecureTransport(nextUri);
+                    }
+                    catch (InvalidOperationException exception)
+                    {
+                        throw new RecordedHttpExchangeException(exception.Message, response.StatusCode, exchanges.ToArray(), exception);
+                    }
+
+                    var sameOrigin = SameOrigin(current.RequestUri!, nextUri);
+
+                    var next = new HttpRequestMessage(HttpMethod.Get, nextUri);
+                    foreach (var header in current.Headers)
+                    {
+                        if (header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) && !sameOrigin)
+                        {
+                            continue;
+                        }
+
+                        next.Headers.TryAddWithoutValidation(header.Key, header.Value);
+                    }
+
                     if (ownsCurrent)
                     {
                         current.Dispose();
                     }
 
-                    return response;
+                    current = next;
+                    ownsCurrent = true;
                 }
-
-                if (redirect == MaximumRedirects)
-                {
-                    response.Dispose();
-                    throw new HttpRequestException("Maximum safe redirect count exceeded.");
-                }
-
-                var nextUri = response.Headers.Location.IsAbsoluteUri
-                    ? response.Headers.Location
-                    : new Uri(current.RequestUri!, response.Headers.Location);
-                EnsureSecureTransport(nextUri);
-                var sameOrigin = SameOrigin(current.RequestUri!, nextUri);
-                response.Dispose();
-
-                var next = new HttpRequestMessage(HttpMethod.Get, nextUri);
-                foreach (var header in current.Headers)
-                {
-                    if (header.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase) && !sameOrigin)
-                    {
-                        continue;
-                    }
-
-                    next.Headers.TryAddWithoutValidation(header.Key, header.Value);
-                }
-
-                if (ownsCurrent)
-                {
-                    current.Dispose();
-                }
-
-                current = next;
-                ownsCurrent = true;
             }
 
             throw new InvalidOperationException("Redirect processing exited unexpectedly.");
@@ -154,6 +260,26 @@ public sealed class SecureFileDownloadService(IHttpClientFactory httpClientFacto
 
             throw;
         }
+    }
+
+    private static async Task<string> ReadRedirectBodyAsync(HttpContent content, CancellationToken cancellationToken)
+    {
+        const int maximumBytes = 2 * 1024 * 1024;
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
+        using var buffer = new MemoryStream(capacity: 64 * 1024);
+        var chunk = new byte[64 * 1024];
+        int read;
+        while ((read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
+        {
+            if (buffer.Length + read > maximumBytes)
+            {
+                return "[BODY OMITTED: redirect response exceeded the safe 2 MiB capture limit]";
+            }
+
+            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
+        }
+
+        return System.Text.Encoding.UTF8.GetString(buffer.GetBuffer(), 0, checked((int)buffer.Length));
     }
 
     private static bool IsRedirect(HttpStatusCode statusCode) => statusCode is
@@ -173,6 +299,28 @@ public sealed class SecureFileDownloadService(IHttpClientFactory httpClientFacto
         if (uri.Scheme != Uri.UriSchemeHttps && !(uri.Scheme == Uri.UriSchemeHttp && uri.IsLoopback))
         {
             throw new InvalidOperationException("FHIR downloads and redirects require HTTPS; HTTP is permitted only for loopback integration tests.");
+        }
+    }
+
+    private sealed class CapturedDownloadResponse(
+        HttpResponseMessage response,
+        HttpRequestMessage request,
+        bool ownsRequest,
+        DateTimeOffset startedAtUtc,
+        IReadOnlyList<HttpExchangeContract> redirectExchanges) : IDisposable
+    {
+        public HttpResponseMessage Response { get; } = response;
+        public HttpRequestMessage Request { get; } = request;
+        public DateTimeOffset StartedAtUtc { get; } = startedAtUtc;
+        public IReadOnlyList<HttpExchangeContract> RedirectExchanges { get; } = redirectExchanges;
+
+        public void Dispose()
+        {
+            Response.Dispose();
+            if (ownsRequest)
+            {
+                Request.Dispose();
+            }
         }
     }
 }

@@ -86,7 +86,42 @@ public interface ILocalCommitService
     Task<bool> VerifyAsync(ManagedExportPaths paths, Guid expectedJobId, string expectedManifestHash, CancellationToken cancellationToken);
 }
 
-public sealed record DownloadExecutionResult(long Bytes, string Sha256, string TemporaryPath, string? ETag, DateTimeOffset? LastModifiedUtc, bool Resumed);
+public sealed record DownloadExecutionResult(
+    long Bytes,
+    string Sha256,
+    string TemporaryPath,
+    string? ETag,
+    DateTimeOffset? LastModifiedUtc,
+    bool Resumed,
+    IReadOnlyList<HttpExchangeContract>? HttpExchanges = null)
+{
+    public DownloadExecutionResult(
+        long bytes,
+        string sha256,
+        string temporaryPath,
+        string? eTag,
+        DateTimeOffset? lastModifiedUtc,
+        bool resumed)
+        : this(bytes, sha256, temporaryPath, eTag, lastModifiedUtc, resumed, null)
+    {
+    }
+
+    public void Deconstruct(
+        out long bytes,
+        out string sha256,
+        out string temporaryPath,
+        out string? eTag,
+        out DateTimeOffset? lastModifiedUtc,
+        out bool resumed)
+    {
+        bytes = Bytes;
+        sha256 = Sha256;
+        temporaryPath = TemporaryPath;
+        eTag = ETag;
+        lastModifiedUtc = LastModifiedUtc;
+        resumed = Resumed;
+    }
+}
 
 public interface IFileDownloadService
 {

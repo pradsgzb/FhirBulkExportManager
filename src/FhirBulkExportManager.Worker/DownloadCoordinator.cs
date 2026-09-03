@@ -68,6 +68,13 @@ public sealed class DownloadCoordinator(
         try
         {
             var result = await downloadService.DownloadAsync(plugin, exactStatusUri, token, file, finalPath, cancellationToken).ConfigureAwait(false);
+            await RecordHttpExchangesAsync(
+                job,
+                file,
+                "FileDownloadReceived",
+                "Download response headers were received and the response body was preserved in managed storage.",
+                result.HttpExchanges,
+                cancellationToken).ConfigureAwait(false);
             var beforeComplete = file.Version;
             file.CompleteDownload(timeProvider.GetUtcNow(), result.Bytes, result.Sha256);
             await exportStore.UpdateFileAsync(file, beforeComplete, cancellationToken).ConfigureAwait(false);
@@ -99,6 +106,17 @@ public sealed class DownloadCoordinator(
         }
         catch (Exception exception) when (exception is HttpRequestException or IOException or JsonException)
         {
+            if (exception is RecordedHttpExchangeException recorded)
+            {
+                await RecordHttpExchangesAsync(
+                    job,
+                    file,
+                    "FileDownloadFailed",
+                    "The file request failed; its sanitized request and available response details were preserved.",
+                    recorded.HttpExchanges,
+                    cancellationToken).ConfigureAwait(false);
+            }
+
             var expected = file.Version;
             if (file.AttemptCount >= MaximumAttempts)
             {
@@ -112,5 +130,35 @@ public sealed class DownloadCoordinator(
             await exportStore.UpdateFileAsync(file, expected, cancellationToken).ConfigureAwait(false);
             return new DownloadStepResult(false, file.Status == ExportFileStatus.Failed, false, file.LastError);
         }
+    }
+
+    private async Task RecordHttpExchangesAsync(
+        ExportJob job,
+        ExportFile file,
+        string eventType,
+        string message,
+        IReadOnlyList<HttpExchangeContract>? exchanges,
+        CancellationToken cancellationToken)
+    {
+        if (exchanges is not { Count: > 0 })
+        {
+            return;
+        }
+
+        var operationId = Guid.NewGuid();
+        var metadata = JsonSerializer.Serialize(
+            new JobEventMetadataContract(null, exchanges),
+            JsonDefaults.Options);
+        var jobEvent = new ExportJobEvent(
+            job.Id,
+            job.State,
+            job.State,
+            eventType,
+            timeProvider.GetUtcNow(),
+            $"{message} File: {file.SafeLocalFileName}",
+            operationId,
+            operationId.ToString("N"),
+            metadata);
+        await exportStore.AddJobEventAsync(jobEvent, cancellationToken).ConfigureAwait(false);
     }
 }

@@ -54,21 +54,129 @@
                         <TextBox Text="{Binding SearchText, UpdateSourceTrigger=PropertyChanged}" MinWidth="360" ToolTip="Search by job name, job ID, or Group ID" AutomationProperties.Name="Search export jobs" />
                     </DockPanel>
 
-                    <DataGrid Grid.Row="2" ItemsSource="{Binding Jobs}" SelectedItem="{Binding SelectedJob}" SelectionMode="Single" SelectionUnit="FullRow">
-                        <DataGrid.Columns>
-                            <DataGridTextColumn Header="Status" Binding="{Binding State}" Width="125" />
-                            <DataGridTextColumn Header="Job Name" Binding="{Binding Name}" Width="2*" />
-                            <DataGridTextColumn Header="Export" Binding="{Binding ExportType}" Width="90" />
-                            <DataGridTextColumn Header="Group / Scope" Binding="{Binding GroupId}" Width="150" />
-                            <DataGridTextColumn Header="Created (UTC)" Binding="{Binding CreatedAtUtc, StringFormat={}{0:u}}" Width="155" />
-                            <DataGridTextColumn Header="Next Check (UTC)" Binding="{Binding NextPollAtUtc, StringFormat={}{0:u}}" Width="155" />
-                            <DataGridTextColumn Header="Progress" Binding="{Binding ProgressText}" Width="170" />
-                            <DataGridTextColumn Header="Files" Binding="{Binding OutputFileCount}" Width="55" />
-                            <DataGridTextColumn Header="Downloaded" Binding="{Binding DownloadedFileCount}" Width="85" />
-                            <DataGridTextColumn Header="Plugin" Binding="{Binding PluginVersion}" Width="75" />
-                            <DataGridTextColumn Header="Last Error" Binding="{Binding LastErrorMessage}" Width="2*" />
-                        </DataGrid.Columns>
-                    </DataGrid>
+                    <Grid Grid.Row="2">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="5*" MinHeight="120" />
+                            <RowDefinition Height="6" />
+                            <RowDefinition Height="7*" MinHeight="200" />
+                        </Grid.RowDefinitions>
+
+                        <DataGrid Grid.Row="0" ItemsSource="{Binding Jobs}" SelectedItem="{Binding SelectedJob}" SelectionMode="Single" SelectionUnit="FullRow" AutomationProperties.Name="Export jobs">
+                            <DataGrid.Columns>
+                                <DataGridTextColumn Header="Status" Binding="{Binding State}" Width="125" />
+                                <DataGridTextColumn Header="Job Name" Binding="{Binding Name}" Width="2*" />
+                                <DataGridTextColumn Header="Export" Binding="{Binding ExportType}" Width="90" />
+                                <DataGridTextColumn Header="Group / Scope" Binding="{Binding GroupId}" Width="150" />
+                                <DataGridTextColumn Header="Created (UTC)" Binding="{Binding CreatedAtUtc, StringFormat={}{0:u}}" Width="155" />
+                                <DataGridTextColumn Header="Next Check (UTC)" Binding="{Binding NextPollAtUtc, StringFormat={}{0:u}}" Width="155" />
+                                <DataGridTextColumn Header="Progress (X-Progress)" Binding="{Binding ProgressText}" Width="220" />
+                                <DataGridTextColumn Header="Files" Binding="{Binding OutputFileCount}" Width="55" />
+                                <DataGridTextColumn Header="Downloaded" Binding="{Binding DownloadedFileCount}" Width="85" />
+                                <DataGridTextColumn Header="Plugin" Binding="{Binding PluginVersion}" Width="75" />
+                                <DataGridTextColumn Header="Last Error" Binding="{Binding LastErrorMessage}" Width="2*" />
+                            </DataGrid.Columns>
+                        </DataGrid>
+
+                        <GridSplitter Grid.Row="1" Height="6" HorizontalAlignment="Stretch" VerticalAlignment="Center" Background="#D0D5DD" ResizeDirection="Rows" ResizeBehavior="PreviousAndNext" AutomationProperties.Name="Resize job details" />
+
+                        <Border Grid.Row="2" Background="White" BorderBrush="#D0D5DD" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,6,0,0">
+                            <Grid>
+                                <Grid.RowDefinitions>
+                                    <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="*" />
+                                </Grid.RowDefinitions>
+
+                                <DockPanel Margin="2,0,2,10">
+                                    <Border DockPanel.Dock="Right" Background="#ECFDF3" BorderBrush="#6CE9A6" BorderThickness="1" CornerRadius="4" Padding="12,7" MaxWidth="500">
+                                        <StackPanel>
+                                            <TextBlock Text="LATEST SERVER STATUS (X-PROGRESS)" Foreground="#027A48" FontSize="11" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding SelectedJob.ProgressText, TargetNullValue='No X-Progress received yet'}" FontSize="15" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                    </Border>
+                                    <StackPanel>
+                                        <TextBlock Text="{Binding SelectedJob.Name, TargetNullValue='Select a job'}" FontSize="19" FontWeight="SemiBold" />
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="{Binding SelectedJob.State}" Foreground="#175CD3" FontWeight="SemiBold" />
+                                            <TextBlock Text="  ·  " Foreground="#98A2B3" />
+                                            <TextBlock Text="{Binding SelectedJob.Id}" Foreground="#475467" FontFamily="Consolas" />
+                                            <TextBlock Text="  ·  " Foreground="#98A2B3" />
+                                            <TextBlock Text="{Binding JobDetailStatus}" Foreground="#475467" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </DockPanel>
+
+                                <Grid Grid.Row="1">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="11*" MinWidth="500" />
+                                        <ColumnDefinition Width="8" />
+                                        <ColumnDefinition Width="9*" MinWidth="420" />
+                                    </Grid.ColumnDefinitions>
+
+                                    <Grid Grid.Column="0">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Text="Status history" FontSize="15" FontWeight="SemiBold" Margin="2,0,0,6" />
+                                        <DataGrid Grid.Row="1" ItemsSource="{Binding SelectedJobHistory}" SelectedItem="{Binding SelectedStatusHistory}" SelectionMode="Single" SelectionUnit="FullRow" AutomationProperties.Name="Job status history">
+                                            <DataGrid.Columns>
+                                                <DataGridTextColumn Header="UTC" Binding="{Binding TimestampUtc, StringFormat={}{0:u}}" Width="150" />
+                                                <DataGridTextColumn Header="State" Binding="{Binding StateChange}" Width="180" />
+                                                <DataGridTextColumn Header="X-Progress" Binding="{Binding Progress}" Width="210" />
+                                                <DataGridTextColumn Header="HTTP" Binding="{Binding RequestCount}" Width="50" />
+                                                <DataGridTextColumn Header="Event" Binding="{Binding EventType}" Width="170" />
+                                                <DataGridTextColumn Header="Message" Binding="{Binding Message}" Width="2*" />
+                                            </DataGrid.Columns>
+                                        </DataGrid>
+                                    </Grid>
+
+                                    <GridSplitter Grid.Column="1" Width="8" HorizontalAlignment="Center" VerticalAlignment="Stretch" Background="#EAECF0" ResizeDirection="Columns" ResizeBehavior="PreviousAndNext" AutomationProperties.Name="Resize HTTP inspector" />
+
+                                    <Grid Grid.Column="2">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="*" />
+                                        </Grid.RowDefinitions>
+                                        <DockPanel Margin="2,0,0,3">
+                                            <TextBlock DockPanel.Dock="Right" Text="Secrets redacted" Foreground="#B54708" FontSize="11" VerticalAlignment="Center" />
+                                            <TextBlock Text="Preserved HTTP exchange" FontSize="15" FontWeight="SemiBold" />
+                                        </DockPanel>
+                                        <ComboBox Grid.Row="1" ItemsSource="{Binding SelectedHttpExchanges}" SelectedItem="{Binding SelectedHttpExchange}" DisplayMemberPath="Summary" AutomationProperties.Name="HTTP exchange" />
+                                        <StackPanel Grid.Row="2" Margin="4,2,4,5">
+                                            <TextBlock Text="{Binding SelectedHttpExchange.RequestLine}" FontFamily="Consolas" TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding SelectedHttpExchange.ResponseStatus}" FontWeight="SemiBold" />
+                                            <TextBlock Text="{Binding SelectedHttpExchange.Timing}" Foreground="#667085" />
+                                            <TextBlock Text="{Binding SelectedHttpExchange.Failure}" Foreground="{StaticResource DangerBrush}" TextWrapping="Wrap" />
+                                        </StackPanel>
+                                        <TabControl Grid.Row="3">
+                                            <TabItem Header="Headers">
+                                                <Grid Margin="7">
+                                                    <Grid.RowDefinitions>
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="*" />
+                                                        <RowDefinition Height="Auto" />
+                                                        <RowDefinition Height="*" />
+                                                    </Grid.RowDefinitions>
+                                                    <TextBlock Text="Request headers" FontWeight="SemiBold" />
+                                                    <TextBox Grid.Row="1" Text="{Binding SelectedHttpExchange.RequestHeadersText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas" FontSize="12" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" />
+                                                    <TextBlock Grid.Row="2" Text="Response headers" FontWeight="SemiBold" Margin="0,6,0,0" />
+                                                    <TextBox Grid.Row="3" Text="{Binding SelectedHttpExchange.ResponseHeadersText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas" FontSize="12" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" />
+                                                </Grid>
+                                            </TabItem>
+                                            <TabItem Header="Request Body">
+                                                <TextBox Text="{Binding SelectedHttpExchange.RequestBodyText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Margin="7" />
+                                            </TabItem>
+                                            <TabItem Header="Response Body">
+                                                <TextBox Text="{Binding SelectedHttpExchange.ResponseBodyText, Mode=OneWay}" IsReadOnly="True" AcceptsReturn="True" FontFamily="Consolas" FontSize="12" TextWrapping="NoWrap" HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto" Margin="7" />
+                                            </TabItem>
+                                        </TabControl>
+                                    </Grid>
+                                </Grid>
+                            </Grid>
+                        </Border>
+                    </Grid>
 
                     <WrapPanel Grid.Row="3" Margin="0,8,0,0">
                         <Button Content="Start Export" Command="{Binding StartCommand}" />
@@ -78,7 +186,7 @@
                         <Button Content="Cancel Remote Export" Foreground="{StaticResource DangerBrush}" Command="{Binding CancelRemoteCommand}" />
                         <Button Content="Approve Partial Export" Command="{Binding ApprovePartialCommand}" />
                         <Button Content="Cleanup Remote Export" Foreground="{StaticResource DangerBrush}" Command="{Binding CleanupRemoteCommand}" />
-                        <Button Content="Details" Command="{Binding DetailsCommand}" />
+                        <Button Content="Open Full Details" Command="{Binding DetailsCommand}" />
                         <Button Content="Open Export Folder" Command="{Binding OpenFolderCommand}" />
                         <Button Content="Archive" Command="{Binding ArchiveCommand}" />
                         <Button Content="Delete Local Job" Foreground="{StaticResource DangerBrush}" Command="{Binding DeleteLocalCommand}" />

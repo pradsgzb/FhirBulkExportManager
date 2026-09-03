@@ -27,6 +27,9 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
     public async Task<AccessToken> AuthenticateAsync(AuthenticationContext context, TimeProvider timeProvider, CancellationToken cancellationToken)
     {
         var configuration = DeserializeAuthenticationConfiguration(context.AdditionalConfigurationJson);
+        var exchanges = new List<HttpExchangeContract>();
+        try
+        {
         string? assertion = null;
         if (!string.IsNullOrWhiteSpace(context.AssertionEndpoint))
         {
@@ -40,14 +43,22 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
                     x => x.Key,
                     x => ResolveTemplate(x.Value, context),
                     StringComparer.Ordinal);
+            var assertionRequestBody = JsonSerializer.Serialize(assertionFields, JsonDefaults.Options);
             using var assertionRequest = new HttpRequestMessage(HttpMethod.Post, RequireHttpsOrLoopback(context.AssertionEndpoint))
             {
-                Content = new StringContent(JsonSerializer.Serialize(assertionFields, JsonDefaults.Options), Encoding.UTF8),
+                Content = new StringContent(assertionRequestBody, Encoding.UTF8),
             };
             assertionRequest.Content!.Headers.ContentType = new MediaTypeHeaderValue("application/json");
-            using var assertionResponse = await SendAsync(assertionRequest, cancellationToken).ConfigureAwait(false);
-            var assertionPayload = await ReadSmallBodyAsync(assertionResponse.Content, cancellationToken).ConfigureAwait(false);
-            assertionResponse.EnsureSuccessStatusCode();
+            var assertionStarted = timeProvider.GetUtcNow();
+            using var assertionResponse = await SendAuthenticationRequestAsync(
+                "HealthWizz assertion",
+                assertionRequest,
+                RedactKnownValues(assertionRequestBody, GetConfiguredSecrets(context)),
+                assertionStarted,
+                timeProvider,
+                exchanges,
+                cancellationToken).ConfigureAwait(false);
+            var assertionPayload = assertionResponse.Body;
             assertion = ReadAssertion(assertionPayload, configuration.AssertionResponseProperty);
         }
 
@@ -81,13 +92,21 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
             tokenFields[field.Key] = ResolveTemplate(field.Value, context);
         }
 
+        var tokenRequestBody = EncodeForm(tokenFields);
         using var tokenRequest = new HttpRequestMessage(HttpMethod.Post, RequireHttpsOrLoopback(context.TokenEndpoint))
         {
             Content = new FormUrlEncodedContent(tokenFields),
         };
-        using var tokenResponse = await SendAsync(tokenRequest, cancellationToken).ConfigureAwait(false);
-        var tokenJson = await ReadSmallBodyAsync(tokenResponse.Content, cancellationToken).ConfigureAwait(false);
-        tokenResponse.EnsureSuccessStatusCode();
+        var tokenStarted = timeProvider.GetUtcNow();
+        using var tokenResponse = await SendAuthenticationRequestAsync(
+            "OAuth token",
+            tokenRequest,
+            RedactKnownValues(tokenRequestBody, GetConfiguredSecrets(context).Append(assertion ?? string.Empty)),
+            tokenStarted,
+            timeProvider,
+            exchanges,
+            cancellationToken).ConfigureAwait(false);
+        var tokenJson = tokenResponse.Body;
         using var tokenDocument = JsonDocument.Parse(tokenJson);
         if (!tokenDocument.RootElement.TryGetProperty("access_token", out var accessTokenElement) || string.IsNullOrWhiteSpace(accessTokenElement.GetString()))
         {
@@ -100,7 +119,24 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         var tokenType = tokenDocument.RootElement.TryGetProperty("token_type", out var tokenTypeElement)
             ? tokenTypeElement.GetString() ?? "Bearer"
             : "Bearer";
-        return new AccessToken(accessTokenElement.GetString()!, timeProvider.GetUtcNow().AddSeconds(expiresIn), tokenType);
+        return new AccessToken(accessTokenElement.GetString()!, timeProvider.GetUtcNow().AddSeconds(expiresIn), tokenType, exchanges);
+        }
+        catch (RecordedHttpExchangeException)
+        {
+            throw;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is JsonException or InvalidOperationException)
+        {
+            throw new RecordedHttpExchangeException(
+                SecurityRedactor.Redact(exception.Message),
+                null,
+                exchanges.ToArray(),
+                exception);
+        }
     }
 
     public async Task<ConnectionTestResult> TestConnectionAsync(VendorSiteContext site, AccessToken? token, CancellationToken cancellationToken)
@@ -109,11 +145,16 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         var metadataUri = new Uri(EnsureTrailingSlash(site.FhirBaseUrl), "metadata");
         using var request = new HttpRequestMessage(HttpMethod.Get, metadataUri);
         request.Headers.Accept.Add(FhirJson);
+        var startedAtUtc = DateTimeOffset.UtcNow;
         using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
         var body = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        var exchanges = new[]
+        {
+            HttpExchangeCapture.Create("FHIR capability statement", startedAtUtc, DateTimeOffset.UtcNow, request, response, responseBody: body),
+        };
         return response.IsSuccessStatusCode
-            ? new ConnectionTestResult(true, response.StatusCode, "FHIR metadata request succeeded without authentication.", body)
-            : new ConnectionTestResult(false, response.StatusCode, $"FHIR metadata request returned {(int)response.StatusCode} {response.ReasonPhrase}.", null);
+            ? new ConnectionTestResult(true, response.StatusCode, "FHIR metadata request succeeded without authentication.", body, exchanges)
+            : new ConnectionTestResult(false, response.StatusCode, $"FHIR metadata request returned {(int)response.StatusCode} {response.ReasonPhrase}.", null, exchanges);
     }
 
     public async Task<KickoffResult> KickoffAsync(BulkExportKickoffRequest request, AccessToken token, TimeProvider timeProvider, CancellationToken cancellationToken)
@@ -123,9 +164,17 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         message.Headers.Accept.Add(FhirJson);
         message.Headers.TryAddWithoutValidation("Prefer", "respond-async");
         message.Headers.TryAddWithoutValidation("X-Correlation-Id", request.CorrelationId);
+        var startedAtUtc = timeProvider.GetUtcNow();
+        HttpResponseMessage? response = null;
+        string? responseBody = null;
         try
         {
-            using var response = await SendAsync(message, cancellationToken).ConfigureAwait(false);
+            response = await SendAsync(message, cancellationToken).ConfigureAwait(false);
+            responseBody = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            var exchanges = new[]
+            {
+                HttpExchangeCapture.Create("Bulk export kickoff", startedAtUtc, timeProvider.GetUtcNow(), message, response, responseBody: responseBody),
+            };
             var now = timeProvider.GetUtcNow();
             var retryAt = RetryAfterParser.Parse(response.Headers.RetryAfter, now);
             if (response.StatusCode == HttpStatusCode.Accepted)
@@ -133,27 +182,34 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
                 var rawContentLocation = GetHeader(response, "Content-Location");
                 if (string.IsNullOrWhiteSpace(rawContentLocation) || !Uri.TryCreate(rawContentLocation, UriKind.Absolute, out var exactContentLocation))
                 {
-                    return new KickoffResult(KickoffDisposition.Rejected, response.StatusCode, null, null, endpoint.AbsoluteUri, null, null, "MissingContentLocation", "Server returned 202 without an absolute Content-Location header.");
+                    return new KickoffResult(KickoffDisposition.Rejected, response.StatusCode, null, null, endpoint.AbsoluteUri, null, responseBody, "MissingContentLocation", "Server returned 202 without an absolute Content-Location header.", exchanges);
                 }
 
-                return new KickoffResult(KickoffDisposition.Accepted, response.StatusCode, exactContentLocation, retryAt, endpoint.AbsoluteUri, GetHeader(response, "X-Progress"), null, null, null);
+                return new KickoffResult(KickoffDisposition.Accepted, response.StatusCode, exactContentLocation, retryAt, endpoint.AbsoluteUri, GetHeader(response, "X-Progress"), responseBody, null, null, exchanges);
             }
 
-            var outcome = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
             if (response.StatusCode == HttpStatusCode.TooManyRequests || (int)response.StatusCode >= 500)
             {
-                return new KickoffResult(KickoffDisposition.RetryLater, response.StatusCode, null, retryAt ?? now.AddSeconds(30), endpoint.AbsoluteUri, null, outcome, "RemoteTransient", $"Kickoff returned {(int)response.StatusCode}.");
+                return new KickoffResult(KickoffDisposition.RetryLater, response.StatusCode, null, retryAt ?? now.AddSeconds(30), endpoint.AbsoluteUri, GetHeader(response, "X-Progress"), responseBody, "RemoteTransient", $"Kickoff returned {(int)response.StatusCode}.", exchanges);
             }
 
-            return new KickoffResult(KickoffDisposition.Rejected, response.StatusCode, null, null, endpoint.AbsoluteUri, null, outcome, "KickoffRejected", $"Kickoff returned {(int)response.StatusCode} {response.ReasonPhrase}.");
+            return new KickoffResult(KickoffDisposition.Rejected, response.StatusCode, null, null, endpoint.AbsoluteUri, GetHeader(response, "X-Progress"), responseBody, "KickoffRejected", $"Kickoff returned {(int)response.StatusCode} {response.ReasonPhrase}.", exchanges);
         }
         catch (HttpRequestException exception)
         {
-            return new KickoffResult(KickoffDisposition.Ambiguous, null, null, null, endpoint.AbsoluteUri, null, null, "AmbiguousKickoff", "The connection failed after kickoff was attempted; server acceptance is unknown. " + SecurityRedactor.Redact(exception.Message));
+            var exchange = HttpExchangeCapture.Create("Bulk export kickoff", startedAtUtc, timeProvider.GetUtcNow(), message, response, responseBody: responseBody, failure: exception.Message);
+            response?.Dispose();
+            return new KickoffResult(KickoffDisposition.Ambiguous, exception.StatusCode, null, null, endpoint.AbsoluteUri, null, responseBody, "AmbiguousKickoff", "The connection failed after kickoff was attempted; server acceptance is unknown. " + SecurityRedactor.Redact(exception.Message), [exchange]);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            return new KickoffResult(KickoffDisposition.Ambiguous, null, null, null, endpoint.AbsoluteUri, null, null, "AmbiguousKickoffTimeout", "Kickoff timed out after dispatch; server acceptance is unknown. " + SecurityRedactor.Redact(exception.Message));
+            var exchange = HttpExchangeCapture.Create("Bulk export kickoff", startedAtUtc, timeProvider.GetUtcNow(), message, response, responseBody: responseBody, failure: exception.Message);
+            response?.Dispose();
+            return new KickoffResult(KickoffDisposition.Ambiguous, null, null, null, endpoint.AbsoluteUri, null, responseBody, "AmbiguousKickoffTimeout", "Kickoff timed out after dispatch; server acceptance is unknown. " + SecurityRedactor.Redact(exception.Message), [exchange]);
+        }
+        finally
+        {
+            response?.Dispose();
         }
     }
 
@@ -164,44 +220,61 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         _ = site;
         using var request = CreateAuthorizedRequest(HttpMethod.Get, exactContentLocation, token);
         request.Headers.Accept.Add(Json);
+        var startedAtUtc = timeProvider.GetUtcNow();
+        HttpResponseMessage? response = null;
+        string? responseBody = null;
         try
         {
-            using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            responseBody = await ReadSmallBodyAsync(
+                response.Content,
+                cancellationToken,
+                response.StatusCode == HttpStatusCode.OK ? 16 * 1024 * 1024 : MaximumControlResponseBytes).ConfigureAwait(false);
+            var exchanges = new[]
+            {
+                HttpExchangeCapture.Create("Bulk export status", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody),
+            };
             var now = timeProvider.GetUtcNow();
             var retryAt = RetryAfterParser.Parse(response.Headers.RetryAfter, now);
             var progress = GetHeader(response, "X-Progress");
             switch (response.StatusCode)
             {
                 case HttpStatusCode.Accepted:
-                    return new PollResult(PollDisposition.Running, response.StatusCode, retryAt, progress, null, null, null, null);
+                    return new PollResult(PollDisposition.Running, response.StatusCode, retryAt, progress, null, responseBody, null, null, exchanges);
                 case HttpStatusCode.OK:
-                    var manifest = await ReadSmallBodyAsync(response.Content, cancellationToken, maximumBytes: 16 * 1024 * 1024).ConfigureAwait(false);
-                    return new PollResult(PollDisposition.Complete, response.StatusCode, null, progress, manifest, null, null, null);
+                    return new PollResult(PollDisposition.Complete, response.StatusCode, null, progress, responseBody, null, null, null, exchanges);
                 case HttpStatusCode.Unauthorized:
-                    return new PollResult(PollDisposition.AuthenticationRequired, response.StatusCode, now, progress, null, await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false), "Unauthorized", "Access token was rejected.");
+                    return new PollResult(PollDisposition.AuthenticationRequired, response.StatusCode, now, progress, null, responseBody, "Unauthorized", "Access token was rejected.", exchanges);
                 case HttpStatusCode.Forbidden:
-                    return new PollResult(PollDisposition.AuthorizationDenied, response.StatusCode, null, progress, null, await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false), "Forbidden", "FHIR server denied the required scope or permission.");
+                    return new PollResult(PollDisposition.AuthorizationDenied, response.StatusCode, null, progress, null, responseBody, "Forbidden", "FHIR server denied the required scope or permission.", exchanges);
                 case HttpStatusCode.NotFound:
-                    return new PollResult(PollDisposition.NotFound, response.StatusCode, null, progress, null, await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false), "RemoteNotFound", "Remote job was not found; retention expiry or prior cleanup may be the cause.");
+                    return new PollResult(PollDisposition.NotFound, response.StatusCode, null, progress, null, responseBody, "RemoteNotFound", "Remote job was not found; retention expiry or prior cleanup may be the cause.", exchanges);
                 case HttpStatusCode.TooManyRequests:
-                    return new PollResult(PollDisposition.RetryLater, response.StatusCode, retryAt ?? now.AddSeconds(60), progress, null, null, "RateLimited", "FHIR server requested backoff.");
+                    return new PollResult(PollDisposition.RetryLater, response.StatusCode, retryAt ?? now.AddSeconds(60), progress, null, responseBody, "RateLimited", "FHIR server requested backoff.", exchanges);
                 default:
-                    var outcome = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
                     if ((int)response.StatusCode >= 500 || response.StatusCode == HttpStatusCode.RequestTimeout)
                     {
-                        return new PollResult(PollDisposition.RetryLater, response.StatusCode, retryAt ?? now.AddSeconds(30), progress, null, outcome, "RemoteTransient", $"Status request returned {(int)response.StatusCode}.");
+                        return new PollResult(PollDisposition.RetryLater, response.StatusCode, retryAt ?? now.AddSeconds(30), progress, null, responseBody, "RemoteTransient", $"Status request returned {(int)response.StatusCode}.", exchanges);
                     }
 
-                    return new PollResult(PollDisposition.FailedPermanent, response.StatusCode, null, progress, null, outcome, "RemoteRejected", $"Status request returned {(int)response.StatusCode} {response.ReasonPhrase}.");
+                    return new PollResult(PollDisposition.FailedPermanent, response.StatusCode, null, progress, null, responseBody, "RemoteRejected", $"Status request returned {(int)response.StatusCode} {response.ReasonPhrase}.", exchanges);
             }
         }
         catch (HttpRequestException exception)
         {
-            return new PollResult(PollDisposition.RetryLater, HttpStatusCode.ServiceUnavailable, timeProvider.GetUtcNow().AddSeconds(30), null, null, null, "NetworkTransient", SecurityRedactor.Redact(exception.Message));
+            var exchange = HttpExchangeCapture.Create("Bulk export status", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody, failure: exception.Message);
+            response?.Dispose();
+            return new PollResult(PollDisposition.RetryLater, exception.StatusCode ?? HttpStatusCode.ServiceUnavailable, timeProvider.GetUtcNow().AddSeconds(30), null, null, responseBody, "NetworkTransient", SecurityRedactor.Redact(exception.Message), [exchange]);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            return new PollResult(PollDisposition.RetryLater, HttpStatusCode.RequestTimeout, timeProvider.GetUtcNow().AddSeconds(30), null, null, null, "RequestTimeout", SecurityRedactor.Redact(exception.Message));
+            var exchange = HttpExchangeCapture.Create("Bulk export status", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody, failure: exception.Message);
+            response?.Dispose();
+            return new PollResult(PollDisposition.RetryLater, HttpStatusCode.RequestTimeout, timeProvider.GetUtcNow().AddSeconds(30), null, null, responseBody, "RequestTimeout", SecurityRedactor.Redact(exception.Message), [exchange]);
+        }
+        finally
+        {
+            response?.Dispose();
         }
     }
 
@@ -263,25 +336,41 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
     {
         _ = site;
         using var request = CreateAuthorizedRequest(HttpMethod.Get, exactContentLocation, token);
+        var startedAtUtc = timeProvider.GetUtcNow();
+        HttpResponseMessage? response = null;
+        string? responseBody = null;
         try
         {
-            using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            responseBody = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            var exchanges = new[]
+            {
+                HttpExchangeCapture.Create("Cleanup verification", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody),
+            };
             return response.StatusCode switch
             {
-                HttpStatusCode.NotFound => new CleanupVerificationResult(CleanupVerificationDisposition.VerifiedDeleted, response.StatusCode, null),
-                HttpStatusCode.OK or HttpStatusCode.Accepted => new CleanupVerificationResult(CleanupVerificationDisposition.StillPresent, response.StatusCode, timeProvider.GetUtcNow().AddSeconds(30)),
-                HttpStatusCode.TooManyRequests => new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, response.StatusCode, RetryAfterParser.Parse(response.Headers.RetryAfter, timeProvider.GetUtcNow()) ?? timeProvider.GetUtcNow().AddSeconds(60)),
-                _ when (int)response.StatusCode >= 500 => new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, response.StatusCode, timeProvider.GetUtcNow().AddSeconds(30)),
-                _ => new CleanupVerificationResult(CleanupVerificationDisposition.Unknown, response.StatusCode, null),
+                HttpStatusCode.NotFound => new CleanupVerificationResult(CleanupVerificationDisposition.VerifiedDeleted, response.StatusCode, null, exchanges),
+                HttpStatusCode.OK or HttpStatusCode.Accepted => new CleanupVerificationResult(CleanupVerificationDisposition.StillPresent, response.StatusCode, timeProvider.GetUtcNow().AddSeconds(30), exchanges),
+                HttpStatusCode.TooManyRequests => new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, response.StatusCode, RetryAfterParser.Parse(response.Headers.RetryAfter, timeProvider.GetUtcNow()) ?? timeProvider.GetUtcNow().AddSeconds(60), exchanges),
+                _ when (int)response.StatusCode >= 500 => new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, response.StatusCode, timeProvider.GetUtcNow().AddSeconds(30), exchanges),
+                _ => new CleanupVerificationResult(CleanupVerificationDisposition.Unknown, response.StatusCode, null, exchanges),
             };
         }
-        catch (HttpRequestException)
+        catch (HttpRequestException exception)
         {
-            return new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, HttpStatusCode.ServiceUnavailable, timeProvider.GetUtcNow().AddSeconds(30));
+            var exchange = HttpExchangeCapture.Create("Cleanup verification", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody, failure: exception.Message);
+            response?.Dispose();
+            return new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, exception.StatusCode ?? HttpStatusCode.ServiceUnavailable, timeProvider.GetUtcNow().AddSeconds(30), [exchange]);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            return new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, HttpStatusCode.RequestTimeout, timeProvider.GetUtcNow().AddSeconds(30));
+            var exchange = HttpExchangeCapture.Create("Cleanup verification", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody, failure: exception.Message);
+            response?.Dispose();
+            return new CleanupVerificationResult(CleanupVerificationDisposition.RetryLater, HttpStatusCode.RequestTimeout, timeProvider.GetUtcNow().AddSeconds(30), [exchange]);
+        }
+        finally
+        {
+            response?.Dispose();
         }
     }
 
@@ -289,19 +378,35 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
     {
         _ = site;
         using var request = CreateAuthorizedRequest(HttpMethod.Delete, exactContentLocation, token);
+        var startedAtUtc = timeProvider.GetUtcNow();
+        HttpResponseMessage? response = null;
+        string? responseBody = null;
         try
         {
-            using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            responseBody = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+            var exchanges = new[]
+            {
+                HttpExchangeCapture.Create("Remote DELETE", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody),
+            };
             var success = response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound;
-            return new CleanupResult(success, response.StatusCode, success ? null : RetryAfterParser.Parse(response.Headers.RetryAfter, timeProvider.GetUtcNow()) ?? timeProvider.GetUtcNow().AddSeconds(30), success ? null : $"DELETE returned {(int)response.StatusCode} {response.ReasonPhrase}.");
+            return new CleanupResult(success, response.StatusCode, success ? null : RetryAfterParser.Parse(response.Headers.RetryAfter, timeProvider.GetUtcNow()) ?? timeProvider.GetUtcNow().AddSeconds(30), success ? null : $"DELETE returned {(int)response.StatusCode} {response.ReasonPhrase}.", exchanges);
         }
         catch (HttpRequestException exception)
         {
-            return new CleanupResult(false, HttpStatusCode.ServiceUnavailable, timeProvider.GetUtcNow().AddSeconds(30), SecurityRedactor.Redact(exception.Message));
+            var exchange = HttpExchangeCapture.Create("Remote DELETE", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody, failure: exception.Message);
+            response?.Dispose();
+            return new CleanupResult(false, exception.StatusCode ?? HttpStatusCode.ServiceUnavailable, timeProvider.GetUtcNow().AddSeconds(30), SecurityRedactor.Redact(exception.Message), [exchange]);
         }
         catch (OperationCanceledException exception) when (!cancellationToken.IsCancellationRequested)
         {
-            return new CleanupResult(false, HttpStatusCode.RequestTimeout, timeProvider.GetUtcNow().AddSeconds(30), SecurityRedactor.Redact(exception.Message));
+            var exchange = HttpExchangeCapture.Create("Remote DELETE", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody, failure: exception.Message);
+            response?.Dispose();
+            return new CleanupResult(false, HttpStatusCode.RequestTimeout, timeProvider.GetUtcNow().AddSeconds(30), SecurityRedactor.Redact(exception.Message), [exchange]);
+        }
+        finally
+        {
+            response?.Dispose();
         }
     }
 
@@ -421,6 +526,102 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         return request;
     }
 
+    private async Task<CapturedAuthenticationResponse> SendAuthenticationRequestAsync(
+        string operation,
+        HttpRequestMessage request,
+        string requestBody,
+        DateTimeOffset startedAtUtc,
+        TimeProvider timeProvider,
+        List<HttpExchangeContract> exchanges,
+        CancellationToken cancellationToken)
+    {
+        HttpResponseMessage? response = null;
+        string? responseBody = null;
+        try
+        {
+            response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            responseBody = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            response?.Dispose();
+            throw;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or OperationCanceledException)
+        {
+            exchanges.Add(HttpExchangeCapture.Create(
+                operation,
+                startedAtUtc,
+                timeProvider.GetUtcNow(),
+                request,
+                response,
+                requestBody,
+                responseBody,
+                failure: exception.Message));
+            var statusCode = response?.StatusCode ?? (exception as HttpRequestException)?.StatusCode;
+            response?.Dispose();
+            throw new RecordedHttpExchangeException(
+                SecurityRedactor.Redact(exception.Message),
+                statusCode,
+                exchanges.ToArray(),
+                exception);
+        }
+
+        var completedResponse = response ?? throw new InvalidOperationException("Authentication request completed without an HTTP response.");
+        var completedBody = responseBody ?? string.Empty;
+        exchanges.Add(HttpExchangeCapture.Create(
+            operation,
+            startedAtUtc,
+            timeProvider.GetUtcNow(),
+            request,
+            completedResponse,
+            requestBody,
+            completedBody));
+        if (!completedResponse.IsSuccessStatusCode)
+        {
+            var statusCode = completedResponse.StatusCode;
+            var reason = completedResponse.ReasonPhrase;
+            completedResponse.Dispose();
+            throw new RecordedHttpExchangeException(
+                $"{operation} returned {(int)statusCode} {reason}.",
+                statusCode,
+                exchanges.ToArray());
+        }
+
+        return new CapturedAuthenticationResponse(completedResponse, completedBody);
+    }
+
+    private static string EncodeForm(IReadOnlyDictionary<string, string> fields) =>
+        string.Join("&", fields.Select(field => Uri.EscapeDataString(field.Key) + "=" + Uri.EscapeDataString(field.Value)));
+
+    private static IEnumerable<string> GetConfiguredSecrets(AuthenticationContext context)
+    {
+        if (!string.IsNullOrEmpty(context.Secrets.ClientSecret))
+        {
+            yield return context.Secrets.ClientSecret;
+        }
+
+        foreach (var value in context.Secrets.AdditionalSecrets.Values)
+        {
+            if (!string.IsNullOrEmpty(value))
+            {
+                yield return value;
+            }
+        }
+    }
+
+    private static string RedactKnownValues(string value, IEnumerable<string> secrets)
+    {
+        var redacted = value;
+        foreach (var secret in secrets.Where(secret => !string.IsNullOrEmpty(secret)).Distinct(StringComparer.Ordinal))
+        {
+            redacted = redacted.Replace(secret, "[REDACTED]", StringComparison.Ordinal);
+            redacted = redacted.Replace(Uri.EscapeDataString(secret), Uri.EscapeDataString("[REDACTED]"), StringComparison.Ordinal);
+        }
+
+        return redacted;
+    }
+
     private Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
         httpClientFactory.CreateClient("VendorApi").SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
@@ -472,5 +673,12 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         public string AssertionResponseProperty { get; set; } = "client_assertion";
         public Dictionary<string, string> AssertionRequestFields { get; set; } = new(StringComparer.Ordinal);
         public Dictionary<string, string> TokenAdditionalFields { get; set; } = new(StringComparer.Ordinal);
+    }
+
+    private sealed class CapturedAuthenticationResponse(HttpResponseMessage response, string body) : IDisposable
+    {
+        public string Body { get; } = body;
+
+        public void Dispose() => response.Dispose();
     }
 }
