@@ -1,4 +1,5 @@
 using FhirBulkExportManager.App.Wpf.Presentation;
+using FhirBulkExportManager.Application.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace FhirBulkExportManager.App.Wpf;
@@ -9,6 +10,7 @@ public static class DependencyInjection
     {
         services.AddSingleton<IUserDialogService, UserDialogService>();
         services.AddSingleton<IWindowNavigationService, WindowNavigationService>();
+        services.AddSingleton<ITransientNotificationService, TransientNotificationService>();
         services.AddSingleton<FirstRunBootstrapper>();
         services.AddTransient<MainViewModel>();
         services.AddTransient<MainWindow>();

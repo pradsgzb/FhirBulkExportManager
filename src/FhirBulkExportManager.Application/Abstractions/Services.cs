@@ -138,3 +138,8 @@ public interface IDiagnosticBundleService
 {
     Task<string> CreateAsync(string destinationDirectory, CancellationToken cancellationToken);
 }
+
+public interface ITransientNotificationService
+{
+    void ShowNetworkAccessHint(string operation);
+}

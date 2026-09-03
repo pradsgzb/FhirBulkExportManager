@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Net;
 using FhirBulkExportManager.Application.Abstractions;
 using FhirBulkExportManager.Domain;
 using FhirBulkExportManager.PluginContracts;
@@ -8,7 +9,8 @@ namespace FhirBulkExportManager.Worker;
 public sealed class AuthenticationTokenProvider(
     IConfigurationStore configurationStore,
     ISecretStore secretStore,
-    TimeProvider timeProvider)
+    TimeProvider timeProvider,
+    ITransientNotificationService? notificationService = null)
 {
     private readonly ConcurrentDictionary<Guid, AccessToken> cache = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> locks = new();
@@ -57,7 +59,16 @@ public sealed class AuthenticationTokenProvider(
                 profile.Audience,
                 profile.AdditionalConfigurationJson,
                 new SecretMaterial(clientSecret, new Dictionary<string, string>(StringComparer.Ordinal)));
-            var token = await plugin.AuthenticateAsync(context, timeProvider, cancellationToken).ConfigureAwait(false);
+            AccessToken token;
+            try
+            {
+                token = await plugin.AuthenticateAsync(context, timeProvider, cancellationToken).ConfigureAwait(false);
+            }
+            catch (RecordedHttpExchangeException exception) when (exception.StatusCode == HttpStatusCode.BadRequest)
+            {
+                notificationService?.ShowNetworkAccessHint("requesting an OAuth access token");
+                throw;
+            }
             ValidateToken(profile, token);
             cache[job.CredentialProfileId] = token with { HttpExchanges = null };
             return token;

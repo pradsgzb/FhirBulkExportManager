@@ -81,7 +81,7 @@ public sealed class HttpExchangeViewItem
     public string ResponseStatus => Exchange.ResponseStatusCode is { } statusCode
         ? "HTTP " + HttpStatusText.Format(statusCode)
         : "No HTTP response";
-    public string Timing => $"{Exchange.StartedAtUtc:u} · {Math.Max(0, (Exchange.CompletedAtUtc - Exchange.StartedAtUtc).TotalMilliseconds):N0} ms";
+    public string Timing => $"{DateTimeDisplayPolicy.Format(Exchange.StartedAtUtc)} · {Math.Max(0, (Exchange.CompletedAtUtc - Exchange.StartedAtUtc).TotalMilliseconds):N0} ms";
     public string Failure => string.IsNullOrWhiteSpace(Exchange.Failure) ? string.Empty : "Failure: " + Exchange.Failure;
     public string RequestHeadersText { get; }
     public string ResponseHeadersText { get; }

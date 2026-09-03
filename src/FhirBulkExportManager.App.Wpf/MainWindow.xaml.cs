@@ -35,6 +35,7 @@ public partial class MainWindow : Window
         Closed += (_, _) =>
         {
             ViewModel.PropertyChanged -= OnViewModelPropertyChanged;
+            ViewModel.Dispose();
             trayIcon.Dispose();
         };
     }

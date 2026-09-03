@@ -6,7 +6,7 @@ using Microsoft.EntityFrameworkCore;
 
 namespace FhirBulkExportManager.Persistence.Sqlite;
 
-public sealed class SqliteConfigurationStore(IDbContextFactory<ExportDbContext> contextFactory) : IConfigurationStore
+public sealed class SqliteConfigurationStore(IDbContextFactory<ExportDbContext> contextFactory) : IConfigurationStore, IApplicationSettingsStore
 {
     public async Task<IReadOnlyList<Vendor>> GetVendorsAsync(bool enabledOnly, CancellationToken cancellationToken)
     {
@@ -278,6 +278,63 @@ public sealed class SqliteConfigurationStore(IDbContextFactory<ExportDbContext> 
         await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
         return new ConnectionDeleteResult(credentialDeleted);
+    }
+
+    public async Task<string?> GetValueAsync(string key, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        return await context.ApplicationSettings
+            .AsNoTracking()
+            .Where(x => x.Key == key)
+            .Select(x => x.Value)
+            .SingleOrDefaultAsync(cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    public async Task SetValueAsync(
+        string key,
+        string value,
+        AuditEvent auditEvent,
+        CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentNullException.ThrowIfNull(value);
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var setting = await context.ApplicationSettings
+            .SingleOrDefaultAsync(x => x.Key == key, cancellationToken)
+            .ConfigureAwait(false);
+        if (setting is null)
+        {
+            context.ApplicationSettings.Add(new ApplicationSetting(key, value, auditEvent.TimestampUtc));
+        }
+        else
+        {
+            setting.Update(value, auditEvent.TimestampUtc);
+        }
+
+        context.AuditEvents.Add(auditEvent);
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    public async Task DeleteValueAsync(string key, AuditEvent auditEvent, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken).ConfigureAwait(false);
+        var setting = await context.ApplicationSettings
+            .SingleOrDefaultAsync(x => x.Key == key, cancellationToken)
+            .ConfigureAwait(false);
+        if (setting is not null)
+        {
+            context.ApplicationSettings.Remove(setting);
+        }
+
+        context.AuditEvents.Add(auditEvent);
+        await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+        await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
     }
 
     private async Task AddAsync<T>(T entity, AuditEvent auditEvent, CancellationToken cancellationToken) where T : class

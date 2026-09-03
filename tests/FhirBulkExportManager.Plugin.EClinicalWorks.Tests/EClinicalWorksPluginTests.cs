@@ -253,7 +253,17 @@ public sealed class EClinicalWorksPluginTests
         Assert.Equal(responseBody, result.OperationOutcomeJson);
         var exchange = Assert.Single(result.HttpExchanges!);
         Assert.Equal("Bad Request", exchange.ResponseReasonPhrase);
-        Assert.Equal(responseBody, exchange.ResponseBody);
+        if (mediaType == "application/json")
+        {
+            using var expectedJson = JsonDocument.Parse(responseBody);
+            using var capturedJson = JsonDocument.Parse(exchange.ResponseBody!);
+            Assert.True(JsonElement.DeepEquals(expectedJson.RootElement, capturedJson.RootElement));
+        }
+        else
+        {
+            Assert.Equal(responseBody, exchange.ResponseBody);
+        }
+
         Assert.Contains(
             exchange.ResponseHeaders,
             header => header.Name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) &&

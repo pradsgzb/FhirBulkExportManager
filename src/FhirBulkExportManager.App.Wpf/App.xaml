@@ -1,8 +1,11 @@
 <Application x:Class="FhirBulkExportManager.App.Wpf.App"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:local="clr-namespace:FhirBulkExportManager.App.Wpf"
              ShutdownMode="OnExplicitShutdown">
     <Application.Resources>
+        <local:DateTimeDisplayConverter x:Key="DateTimeDisplayConverter" />
+        <local:FileCountProgressConverter x:Key="FileCountProgressConverter" />
         <Color x:Key="WindowBackgroundColor">#F4F6F8</Color>
         <Color x:Key="PanelColor">#FFFFFF</Color>
         <Color x:Key="PrimaryColor">#155E75</Color>
@@ -35,4 +38,3 @@
         </Style>
     </Application.Resources>
 </Application>
-

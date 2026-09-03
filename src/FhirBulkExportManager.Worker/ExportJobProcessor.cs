@@ -410,21 +410,54 @@ public sealed class ExportJobProcessor(
     {
         var plugin = pluginCatalog.GetRequired(job.PluginId, job.PluginVersion);
         var result = await downloadCoordinator.ProcessOneAsync(job, plugin, cancellationToken).ConfigureAwait(false);
+        var files = await exportStore.GetFilesAsync(job.Id, cancellationToken).ConfigureAwait(false);
+        var aggregateExpectedVersion = job.Version;
+        var downloadedFiles = files.Count(file => file.Status is ExportFileStatus.Downloaded or ExportFileStatus.Validating or ExportFileStatus.Validated);
+        var validatedFiles = files.Count(file => file.Status == ExportFileStatus.Validated);
+        var downloadedBytes = files
+            .Where(file => file.Status is ExportFileStatus.Downloaded or ExportFileStatus.Validating or ExportFileStatus.Validated)
+            .Sum(file => file.ActualBytes);
+        var totalBytesKnown = files.All(file =>
+            file.ExpectedBytes is not null ||
+            file.Status is ExportFileStatus.Downloaded or ExportFileStatus.Validating or ExportFileStatus.Validated);
+        var totalBytes = totalBytesKnown
+            ? files.Sum(file => file.ExpectedBytes ?? file.ActualBytes)
+            : 0;
+        var totalRecords = files.Sum(file => file.RecordCount);
+        job.RecordFileProgress(downloadedFiles, validatedFiles, downloadedBytes, totalBytes, totalRecords);
         if (result.PauseForLowDisk)
         {
-            var expected = job.Version;
             job.RecordFailure("LowDiskSpace", result.SafeError ?? "Downloads paused to preserve the configured free-space reserve.", incrementRetry: false);
-            await PersistTransitionAsync(job, expected, ExportJobState.Paused, "DownloadsPausedLowDisk", "Local downloads were paused before the disk reserve was breached. The remote export was not cancelled.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
+            await PersistTransitionAsync(job, aggregateExpectedVersion, ExportJobState.Paused, "DownloadsPausedLowDisk", "Local downloads were paused before the disk reserve was breached. The remote export was not cancelled.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
         }
         else if (result.PermanentFailure)
         {
-            var expected = job.Version;
             job.RecordFailure("FileProcessingFailed", result.SafeError ?? "A file failed.", incrementRetry: false);
-            await PersistTransitionAsync(job, expected, ExportJobState.FailedPermanent, "FileProcessingFailed", "One or more files could not be downloaded and validated.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
+            await PersistTransitionAsync(job, aggregateExpectedVersion, ExportJobState.FailedPermanent, "FileProcessingFailed", "One or more files could not be downloaded and validated.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
         }
         else if (result.AllValidated)
         {
-            await TransitionAsync(job, ExportJobState.Validating, "AllFilesValidated", "All required manifest files are downloaded, checksummed, and validated.", cancellationToken).ConfigureAwait(false);
+            await PersistTransitionAsync(job, aggregateExpectedVersion, ExportJobState.Validating, "AllFilesValidated", "All required manifest files are downloaded, checksummed, and validated.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            var operationId = Guid.NewGuid();
+            var message = $"{downloadedFiles:N0} of {files.Count:N0} files downloaded; {validatedFiles:N0} validated.";
+            var jobEvent = new ExportJobEvent(
+                job.Id,
+                job.State,
+                job.State,
+                "DownloadProgressUpdated",
+                timeProvider.GetUtcNow(),
+                message,
+                operationId,
+                operationId.ToString("N"));
+            await exportStore.UpdateJobAsync(
+                job,
+                jobEvent,
+                Audit(job, "DownloadProgressUpdated", "Succeeded", jobEvent.CorrelationId),
+                aggregateExpectedVersion,
+                cancellationToken).ConfigureAwait(false);
         }
     }
 

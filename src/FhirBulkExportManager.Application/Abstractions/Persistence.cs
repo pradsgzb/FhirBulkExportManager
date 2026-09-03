@@ -85,6 +85,13 @@ public interface IConfigurationStore
     Task AddCredentialProfileAsync(CredentialProfile profile, AuditEvent auditEvent, CancellationToken cancellationToken);
 }
 
+public interface IApplicationSettingsStore
+{
+    Task<string?> GetValueAsync(string key, CancellationToken cancellationToken);
+    Task SetValueAsync(string key, string value, AuditEvent auditEvent, CancellationToken cancellationToken);
+    Task DeleteValueAsync(string key, AuditEvent auditEvent, CancellationToken cancellationToken);
+}
+
 public interface IDatabaseLifecycle
 {
     Task InitializeAsync(CancellationToken cancellationToken);

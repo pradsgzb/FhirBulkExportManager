@@ -429,6 +429,8 @@ public sealed class ExportJobService(
 
     public Task<IReadOnlyList<ExportJobEvent>> GetTimelineAsync(Guid jobId, CancellationToken cancellationToken) => exportStore.GetTimelineAsync(jobId, cancellationToken);
 
+    public Task<IReadOnlyList<ExportFile>> GetFilesAsync(Guid jobId, CancellationToken cancellationToken) => exportStore.GetFilesAsync(jobId, cancellationToken);
+
     private async Task<JobActionResult> TransitionAsync(Guid jobId, ExportJobState required, ExportJobState target, string eventType, string message, bool signal, CancellationToken cancellationToken)
     {
         var job = await RequiredJobAsync(jobId, cancellationToken).ConfigureAwait(false);

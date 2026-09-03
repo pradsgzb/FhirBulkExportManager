@@ -1,7 +1,9 @@
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Net;
 using System.Text.Json;
 using System.Windows.Input;
+using System.Windows.Threading;
 using FhirBulkExportManager.App.Wpf.Presentation;
 using FhirBulkExportManager.Application.Abstractions;
 using FhirBulkExportManager.Application.Configuration;
@@ -15,7 +17,7 @@ using Microsoft.Extensions.Options;
 
 namespace FhirBulkExportManager.App.Wpf;
 
-public sealed class MainViewModel : ObservableObject
+public sealed class MainViewModel : ObservableObject, IDisposable
 {
     private const string DefaultEClinicalWorksTokenEndpoint = "https://oauthserver.eclinicalworks.com/oauth/oauth2/token";
     private readonly ExportJobService jobService;
@@ -29,6 +31,27 @@ public sealed class MainViewModel : ObservableObject
     private readonly IUserDialogService dialogs;
     private readonly IWindowNavigationService navigation;
     private readonly TimeProvider timeProvider;
+    private readonly ApplicationSettingsService applicationSettings;
+    private readonly PasswordProtectionService passwordProtection;
+    private readonly ITransientNotificationService transientNotifications;
+    private readonly DispatcherTimer autoRefreshTimer;
+    private readonly DispatcherTimer settingsSaveTimer;
+    private IReadOnlyList<ExportJobEvent> selectedJobEvents = [];
+    private IReadOnlyList<ExportFile> selectedJobFiles = [];
+    private JobDashboardSnapshot jobDashboard = JobDashboardSnapshot.Empty;
+    private DateDisplayMode dateDisplayMode = DateDisplayMode.Utc;
+    private bool autoRefreshEnabled;
+    private int autoRefreshIntervalSeconds = 30;
+    private DateTimeOffset? nextAutoRefreshAtUtc;
+    private string autoRefreshCountdownText = "Auto refresh off";
+    private bool minimizeToTray = true;
+    private bool showNetworkAccessHintOnBadRequest = true;
+    private string settingsStatus = "Options are saved automatically.";
+    private bool passwordConfigured;
+    private bool initialized;
+    private bool refreshInProgress;
+    private bool settingsDirty;
+    private bool disposed;
     private ExportJob? selectedJob;
     private JobStatusHistoryItem? selectedStatusHistory;
     private HttpExchangeViewItem? selectedHttpExchange;
@@ -95,6 +118,9 @@ public sealed class MainViewModel : ObservableObject
         ILocalCommitService commitService,
         IUserDialogService dialogs,
         IWindowNavigationService navigation,
+        ApplicationSettingsService applicationSettings,
+        PasswordProtectionService passwordProtection,
+        ITransientNotificationService transientNotifications,
         IOptions<ProcessingOptions> processingOptions,
         IOptions<StorageOptions> storageOptions,
         TimeProvider timeProvider)
@@ -109,6 +135,9 @@ public sealed class MainViewModel : ObservableObject
         this.commitService = commitService;
         this.dialogs = dialogs;
         this.navigation = navigation;
+        this.applicationSettings = applicationSettings;
+        this.passwordProtection = passwordProtection;
+        this.transientNotifications = transientNotifications;
         this.timeProvider = timeProvider;
         ConfiguredExportLimit = processingOptions.Value.MaxConcurrentExports;
         EffectiveExportLimit = processingOptions.Value.EffectiveMaxConcurrentExports;
@@ -161,6 +190,20 @@ public sealed class MainViewModel : ObservableObject
         CopyHttpExchangeCommand = new AsyncRelayCommand(() => RunAsync(() => CopyTextAsync(SelectedHttpExchange?.AllText, "complete HTTP exchange")), () => SelectedHttpExchange is not null);
         CopyConnectionMetadataCommand = new AsyncRelayCommand(() => RunAsync(() => CopyTextAsync(ConnectionMetadataJson, "saved CapabilityStatement")), () => !string.IsNullOrWhiteSpace(ConnectionMetadataJson));
         CopyConnectionMetadataHttpCommand = new AsyncRelayCommand(() => RunAsync(() => CopyTextAsync(ConnectionMetadataHttpHistoryText, "metadata HTTP history")), () => !string.IsNullOrWhiteSpace(ConnectionMetadataHttpHistoryText));
+        ChangePasswordCommand = new AsyncRelayCommand(() => RunAsync(ChangePasswordAsync));
+        RemovePasswordCommand = new AsyncRelayCommand(() => RunAsync(RemovePasswordAsync), () => PasswordConfigured);
+        RestoreDefaultOptionsCommand = new AsyncRelayCommand(() => RunAsync(RestoreDefaultOptionsAsync));
+
+        autoRefreshTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromSeconds(1),
+        };
+        autoRefreshTimer.Tick += AutoRefreshTimer_Tick;
+        settingsSaveTimer = new DispatcherTimer(DispatcherPriority.Background)
+        {
+            Interval = TimeSpan.FromMilliseconds(600),
+        };
+        settingsSaveTimer.Tick += SettingsSaveTimer_Tick;
     }
 
     public ObservableCollection<ExportJob> Jobs { get; } = [];
@@ -198,6 +241,9 @@ public sealed class MainViewModel : ObservableObject
     public ICommand CopyHttpExchangeCommand { get; }
     public ICommand CopyConnectionMetadataCommand { get; }
     public ICommand CopyConnectionMetadataHttpCommand { get; }
+    public ICommand ChangePasswordCommand { get; }
+    public ICommand RemovePasswordCommand { get; }
+    public ICommand RestoreDefaultOptionsCommand { get; }
 
     public int ConfiguredExportLimit { get; }
     public int EffectiveExportLimit { get; }
@@ -205,7 +251,102 @@ public sealed class MainViewModel : ObservableObject
     public int PerSiteDownloadLimit { get; }
     public string DataRoot { get; }
     public int MinimumFreeDiskSpaceGB { get; }
-    public bool MinimizeToTray { get; set; } = true;
+    public Array DateDisplayModes => Enum.GetValues(typeof(DateDisplayMode));
+
+    public DateDisplayMode SelectedDateDisplayMode
+    {
+        get => dateDisplayMode;
+        set
+        {
+            if (SetProperty(ref dateDisplayMode, value))
+            {
+                DateTimeDisplayPolicy.Mode = value;
+                OnPropertyChanged(nameof(DateDisplayDescription));
+                PreferencesChanged();
+                if (initialized)
+                {
+                    _ = RunAsync(RefreshJobsAsync);
+                    var generation = Interlocked.Increment(ref connectionMetadataLoadGeneration);
+                    _ = LoadConnectionMetadataAsync(SelectedConnectionSite, generation);
+                }
+            }
+        }
+    }
+
+    public string DateDisplayDescription => SelectedDateDisplayMode == DateDisplayMode.Local
+        ? $"Local time ({TimeZoneInfo.Local.DisplayName})"
+        : "Coordinated Universal Time (UTC)";
+
+    public bool AutoRefreshEnabled
+    {
+        get => autoRefreshEnabled;
+        set
+        {
+            if (SetProperty(ref autoRefreshEnabled, value))
+            {
+                ResetAutoRefreshDeadline();
+                PreferencesChanged();
+            }
+        }
+    }
+
+    public int AutoRefreshIntervalSeconds
+    {
+        get => autoRefreshIntervalSeconds;
+        set
+        {
+            var normalized = Math.Clamp(value, 5, 300);
+            if (SetProperty(ref autoRefreshIntervalSeconds, normalized))
+            {
+                OnPropertyChanged(nameof(AutoRefreshIntervalText));
+                ResetAutoRefreshDeadline();
+                PreferencesChanged();
+            }
+        }
+    }
+
+    public string AutoRefreshIntervalText => $"{AutoRefreshIntervalSeconds} seconds";
+    public string AutoRefreshCountdownText { get => autoRefreshCountdownText; private set => SetProperty(ref autoRefreshCountdownText, value); }
+
+    public bool MinimizeToTray
+    {
+        get => minimizeToTray;
+        set
+        {
+            if (SetProperty(ref minimizeToTray, value))
+            {
+                PreferencesChanged();
+            }
+        }
+    }
+
+    public bool ShowNetworkAccessHintOnBadRequest
+    {
+        get => showNetworkAccessHintOnBadRequest;
+        set
+        {
+            if (SetProperty(ref showNetworkAccessHintOnBadRequest, value))
+            {
+                PreferencesChanged();
+            }
+        }
+    }
+
+    public string SettingsStatus { get => settingsStatus; private set => SetProperty(ref settingsStatus, value); }
+    public bool PasswordConfigured
+    {
+        get => passwordConfigured;
+        private set
+        {
+            if (SetProperty(ref passwordConfigured, value))
+            {
+                OnPropertyChanged(nameof(PasswordStatus));
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
+    public string PasswordStatus => PasswordConfigured ? "Password protection is enabled" : "Password protection is not configured";
+    public JobDashboardSnapshot JobDashboard { get => jobDashboard; private set => SetProperty(ref jobDashboard, value); }
 
     public ExportJob? SelectedJob
     {
@@ -390,12 +531,45 @@ public sealed class MainViewModel : ObservableObject
     public int CompletedCount => Jobs.Count(x => x.State == ExportJobState.Completed);
     public bool HasActiveJobs => ActiveCount > 0;
 
-    public async Task InitializeAsync(CancellationToken cancellationToken) => await RefreshAsync(cancellationToken).ConfigureAwait(true);
+    public async Task InitializeAsync(CancellationToken cancellationToken)
+    {
+        var preferences = await applicationSettings.LoadAsync(cancellationToken).ConfigureAwait(true);
+        dateDisplayMode = preferences.DateMode;
+        autoRefreshEnabled = preferences.AutoRefreshEnabled;
+        autoRefreshIntervalSeconds = preferences.AutoRefreshIntervalSeconds;
+        minimizeToTray = preferences.MinimizeToTray;
+        showNetworkAccessHintOnBadRequest = preferences.ShowNetworkAccessHintOnBadRequest;
+        DateTimeDisplayPolicy.Mode = dateDisplayMode;
+        PasswordConfigured = await passwordProtection.IsConfiguredAsync(cancellationToken).ConfigureAwait(true);
+        SettingsStatus = applicationSettings.LoadWarning ?? "Options are saved automatically.";
+        foreach (var propertyName in new[]
+        {
+            nameof(SelectedDateDisplayMode), nameof(DateDisplayDescription), nameof(AutoRefreshEnabled),
+            nameof(AutoRefreshIntervalSeconds), nameof(AutoRefreshIntervalText), nameof(MinimizeToTray),
+            nameof(ShowNetworkAccessHintOnBadRequest),
+        })
+        {
+            OnPropertyChanged(propertyName);
+        }
+
+        initialized = true;
+        ResetAutoRefreshDeadline();
+        autoRefreshTimer.Start();
+        await RefreshAsync(cancellationToken).ConfigureAwait(true);
+    }
 
     public void SetPassword(string value) => ConnectionClientSecret = value;
 
     private async Task RefreshAsync(CancellationToken cancellationToken = default)
     {
+        if (refreshInProgress)
+        {
+            return;
+        }
+
+        refreshInProgress = true;
+        try
+        {
         var selectedVendorId = SelectedVendor?.Id;
         var selectedSiteId = SelectedSite?.Id;
         var selectedCredentialId = SelectedCredential?.Id;
@@ -423,25 +597,53 @@ public sealed class MainViewModel : ObservableObject
             ?? Credentials.FirstOrDefault(x => x.VendorId == SelectedImportVendor?.Id);
         SelectedConnectionVendor = Vendors.FirstOrDefault(x => x.Id == selectedConnectionVendorId) ?? Vendors.FirstOrDefault();
         SelectedConnectionSite = Sites.FirstOrDefault(x => x.Id == selectedConnectionSiteId) ?? Sites.FirstOrDefault();
-        await RefreshJobsAsync(cancellationToken).ConfigureAwait(true);
+        await RefreshJobsCoreAsync(cancellationToken).ConfigureAwait(true);
+        }
+        finally
+        {
+            refreshInProgress = false;
+            ResetAutoRefreshDeadline();
+        }
     }
 
     private async Task RefreshJobsAsync(CancellationToken cancellationToken = default)
+    {
+        if (refreshInProgress)
+        {
+            return;
+        }
+
+        refreshInProgress = true;
+        try
+        {
+            await RefreshJobsCoreAsync(cancellationToken).ConfigureAwait(true);
+        }
+        finally
+        {
+            refreshInProgress = false;
+            ResetAutoRefreshDeadline();
+        }
+    }
+
+    private async Task RefreshJobsCoreAsync(CancellationToken cancellationToken = default)
     {
         var result = await jobService.QueryAsync(new JobQuery(Search: SearchText, Take: 500), cancellationToken).ConfigureAwait(true);
         var selectedId = SelectedJob?.Id;
         Replace(Jobs, result.Items);
         SelectedJob = selectedId is null ? Jobs.FirstOrDefault() : Jobs.FirstOrDefault(x => x.Id == selectedId) ?? Jobs.FirstOrDefault();
         RaiseDashboardCounts();
-        StatusMessage = $"Showing {Jobs.Count:N0} of {result.TotalCount:N0} jobs. Last refreshed {timeProvider.GetLocalNow():t}.";
+        StatusMessage = $"Showing {Jobs.Count:N0} of {result.TotalCount:N0} jobs. Last refreshed {DateTimeDisplayPolicy.Format(timeProvider.GetUtcNow())}.";
     }
 
     private async Task LoadSelectedJobHistoryAsync(Guid? jobId, long generation)
     {
         if (jobId is null)
         {
+            selectedJobEvents = [];
+            selectedJobFiles = [];
             Replace(SelectedJobHistory, []);
             SelectedStatusHistory = null;
+            JobDashboard = JobDashboardSnapshot.Empty;
             JobDetailStatus = "Select a job to inspect its history.";
             return;
         }
@@ -449,7 +651,11 @@ public sealed class MainViewModel : ObservableObject
         JobDetailStatus = "Loading job history…";
         try
         {
-            var events = await jobService.GetTimelineAsync(jobId.Value, CancellationToken.None).ConfigureAwait(true);
+            var eventsTask = jobService.GetTimelineAsync(jobId.Value, CancellationToken.None);
+            var filesTask = jobService.GetFilesAsync(jobId.Value, CancellationToken.None);
+            await Task.WhenAll(eventsTask, filesTask).ConfigureAwait(true);
+            var events = await eventsTask.ConfigureAwait(true);
+            var files = await filesTask.ConfigureAwait(true);
             if (generation != Interlocked.Read(ref jobDetailLoadGeneration) || SelectedJob?.Id != jobId)
             {
                 return;
@@ -461,6 +667,9 @@ public sealed class MainViewModel : ObservableObject
                 .Select(JobStatusHistoryItem.Create)
                 .ToArray();
             Replace(SelectedJobHistory, history);
+            selectedJobEvents = events;
+            selectedJobFiles = files;
+            JobDashboard = JobProgressAnalytics.Calculate(SelectedJob, events, files, timeProvider.GetUtcNow());
             SelectedStatusHistory = SelectedJobHistory.FirstOrDefault();
             var exchangeCount = history.Sum(item => item.HttpExchanges.Count);
             JobDetailStatus = $"{history.Length:N0} status entries · {exchangeCount:N0} preserved HTTP exchanges";
@@ -473,7 +682,10 @@ public sealed class MainViewModel : ObservableObject
             }
 
             Replace(SelectedJobHistory, []);
+            selectedJobEvents = [];
+            selectedJobFiles = [];
             SelectedStatusHistory = null;
+            JobDashboard = JobDashboardSnapshot.Empty;
             JobDetailStatus = "Could not load history: " + SecurityRedactor.Redact(exception.Message);
         }
     }
@@ -627,6 +839,22 @@ public sealed class MainViewModel : ObservableObject
     private async Task CancelRemoteAsync()
     {
         var job = SelectedJob ?? throw new InvalidOperationException("Select a job.");
+        if (await passwordProtection.IsConfiguredAsync(CancellationToken.None).ConfigureAwait(true))
+        {
+            var password = dialogs.RequestPassword(
+                "Confirm application password",
+                "Remote cancellation is destructive. Enter the application password before continuing to the typed confirmation.");
+            if (password is null)
+            {
+                return;
+            }
+
+            if (!await passwordProtection.VerifyAsync(password, CancellationToken.None).ConfigureAwait(true))
+            {
+                throw new InvalidOperationException("The application password is incorrect. The remote export was not cancelled.");
+            }
+        }
+
         var confirmation = dialogs.RequestTypedConfirmation(
             "Cancel remote export",
             $"This sends DELETE to the exact remote Content-Location and may permanently cancel the server-side export.\n\nJob: {job.Name}\nSite ID: {job.SiteId}\nState: {job.State}\n\nThis does not mean 'pause local processing'.",
@@ -1028,6 +1256,11 @@ public sealed class MainViewModel : ObservableObject
         await LoadConnectionMetadataAsync(site, generation).ConfigureAwait(true);
         if (!result.Succeeded)
         {
+            if (result.StatusCode == HttpStatusCode.BadRequest)
+            {
+                transientNotifications.ShowNetworkAccessHint("retrieving FHIR metadata");
+            }
+
             throw new InvalidOperationException(result.Summary);
         }
 
@@ -1075,7 +1308,7 @@ public sealed class MainViewModel : ObservableObject
                 Environment.NewLine + Environment.NewLine + new string('=', 80) + Environment.NewLine + Environment.NewLine,
                 history.Attempts.SelectMany((attempt, attemptIndex) =>
                     attempt.HttpExchanges.Select((exchange, exchangeIndex) =>
-                        $"Metadata test {attemptIndex + 1}, HTTP exchange {exchangeIndex + 1} · {attempt.RetrievedAtUtc:u} · {(attempt.Succeeded ? "Succeeded" : "Failed")}" +
+                        $"Metadata test {attemptIndex + 1}, HTTP exchange {exchangeIndex + 1} · {DateTimeDisplayPolicy.Format(attempt.RetrievedAtUtc)} · {(attempt.Succeeded ? "Succeeded" : "Failed")}" +
                         Environment.NewLine + new HttpExchangeViewItem(exchange).AllText)));
             var latestAttempt = history.Attempts.LastOrDefault();
             var endpoint = string.IsNullOrWhiteSpace(history.DiscoveredTokenEndpoint)
@@ -1083,7 +1316,7 @@ public sealed class MainViewModel : ObservableObject
                 : history.DiscoveredTokenEndpoint;
             ConnectionMetadataStatus = latestAttempt is null
                 ? "Stored metadata history is empty."
-                : $"{history.Attempts.Count:N0} metadata test(s) preserved. Last test: {latestAttempt.RetrievedAtUtc:u} ({(latestAttempt.Succeeded ? "succeeded" : "failed")}). OAuth token endpoint: {endpoint}.";
+                : $"{history.Attempts.Count:N0} metadata test(s) preserved. Last test: {DateTimeDisplayPolicy.Format(latestAttempt.RetrievedAtUtc)} ({(latestAttempt.Succeeded ? "succeeded" : "failed")}). OAuth token endpoint: {endpoint}.";
         }
         catch (Exception exception)
         {
@@ -1124,6 +1357,215 @@ public sealed class MainViewModel : ObservableObject
     }
 
     private async Task RunAsync(Func<CancellationToken, Task> action) => await RunAsync(() => action(CancellationToken.None)).ConfigureAwait(true);
+
+    private async Task ChangePasswordAsync()
+    {
+        var configured = await passwordProtection.IsConfiguredAsync(CancellationToken.None).ConfigureAwait(true);
+        var request = dialogs.RequestPasswordChange(configured);
+        if (request is null)
+        {
+            return;
+        }
+
+        await passwordProtection.SetOrChangeAsync(request.CurrentPassword, request.NewPassword, CancellationToken.None).ConfigureAwait(true);
+        PasswordConfigured = true;
+        dialogs.ShowInfo(
+            configured ? "Password changed" : "Password protection enabled",
+            "The application password was saved safely. It will be required at the next startup and before cancelling a remote export.");
+        SettingsStatus = "Security options updated.";
+    }
+
+    private async Task RemovePasswordAsync()
+    {
+        if (!await passwordProtection.IsConfiguredAsync(CancellationToken.None).ConfigureAwait(true))
+        {
+            PasswordConfigured = false;
+            return;
+        }
+
+        var password = dialogs.RequestPassword(
+            "Remove application password",
+            "Enter the current application password. Removing it disables startup protection and the extra password check for remote cancellation.");
+        if (password is null ||
+            !dialogs.Confirm("Remove password protection", "Remove the application password from this Windows installation?"))
+        {
+            return;
+        }
+
+        await passwordProtection.RemoveAsync(password, CancellationToken.None).ConfigureAwait(true);
+        PasswordConfigured = false;
+        SettingsStatus = "Password protection removed.";
+    }
+
+    private async Task RestoreDefaultOptionsAsync()
+    {
+        if (!dialogs.Confirm(
+            "Restore default options",
+            "Restore date display, auto-refresh, tray behavior, and network-hint options to their defaults? Password protection is not changed."))
+        {
+            return;
+        }
+
+        ApplyPreferences(new ApplicationPreferences());
+        settingsDirty = true;
+        await SavePendingSettingsAsync().ConfigureAwait(true);
+        await RefreshJobsAsync().ConfigureAwait(true);
+    }
+
+    private void ApplyPreferences(ApplicationPreferences preferences)
+    {
+        dateDisplayMode = preferences.DateMode;
+        autoRefreshEnabled = preferences.AutoRefreshEnabled;
+        autoRefreshIntervalSeconds = preferences.AutoRefreshIntervalSeconds;
+        minimizeToTray = preferences.MinimizeToTray;
+        showNetworkAccessHintOnBadRequest = preferences.ShowNetworkAccessHintOnBadRequest;
+        DateTimeDisplayPolicy.Mode = dateDisplayMode;
+        foreach (var propertyName in new[]
+        {
+            nameof(SelectedDateDisplayMode), nameof(DateDisplayDescription), nameof(AutoRefreshEnabled),
+            nameof(AutoRefreshIntervalSeconds), nameof(AutoRefreshIntervalText), nameof(MinimizeToTray),
+            nameof(ShowNetworkAccessHintOnBadRequest),
+        })
+        {
+            OnPropertyChanged(propertyName);
+        }
+
+        ResetAutoRefreshDeadline();
+    }
+
+    private void PreferencesChanged()
+    {
+        if (!initialized || disposed)
+        {
+            return;
+        }
+
+        settingsDirty = true;
+        SettingsStatus = "Saving options…";
+        settingsSaveTimer.Stop();
+        settingsSaveTimer.Start();
+    }
+
+    private async void SettingsSaveTimer_Tick(object? sender, EventArgs e)
+    {
+        settingsSaveTimer.Stop();
+        try
+        {
+            await SavePendingSettingsAsync().ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            SettingsStatus = "Options could not be saved: " + SecurityRedactor.Redact(exception.Message);
+        }
+    }
+
+    private async Task SavePendingSettingsAsync()
+    {
+        if (!settingsDirty)
+        {
+            return;
+        }
+
+        await applicationSettings.SaveAsync(
+            new ApplicationPreferences
+            {
+                DateMode = dateDisplayMode,
+                AutoRefreshEnabled = autoRefreshEnabled,
+                AutoRefreshIntervalSeconds = autoRefreshIntervalSeconds,
+                MinimizeToTray = minimizeToTray,
+                ShowNetworkAccessHintOnBadRequest = showNetworkAccessHintOnBadRequest,
+            },
+            CancellationToken.None).ConfigureAwait(true);
+        settingsDirty = false;
+        SettingsStatus = "Options saved automatically.";
+    }
+
+    private async void AutoRefreshTimer_Tick(object? sender, EventArgs e)
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        JobDashboard = JobProgressAnalytics.Calculate(SelectedJob, selectedJobEvents, selectedJobFiles, timeProvider.GetUtcNow());
+        UpdateAutoRefreshCountdown();
+        if (!AutoRefreshEnabled || refreshInProgress || nextAutoRefreshAtUtc is null || timeProvider.GetUtcNow() < nextAutoRefreshAtUtc)
+        {
+            return;
+        }
+
+        try
+        {
+            await RefreshJobsAsync().ConfigureAwait(true);
+        }
+        catch (Exception exception)
+        {
+            StatusMessage = "Auto refresh failed safely: " + SecurityRedactor.Redact(exception.Message);
+            ResetAutoRefreshDeadline();
+        }
+    }
+
+    private void ResetAutoRefreshDeadline()
+    {
+        nextAutoRefreshAtUtc = AutoRefreshEnabled
+            ? timeProvider.GetUtcNow().AddSeconds(AutoRefreshIntervalSeconds)
+            : null;
+        UpdateAutoRefreshCountdown();
+    }
+
+    private void UpdateAutoRefreshCountdown()
+    {
+        if (!AutoRefreshEnabled || nextAutoRefreshAtUtc is null)
+        {
+            AutoRefreshCountdownText = "Auto refresh off";
+            return;
+        }
+
+        if (refreshInProgress)
+        {
+            AutoRefreshCountdownText = "Refreshing…";
+            return;
+        }
+
+        var seconds = Math.Max(0, (int)Math.Ceiling((nextAutoRefreshAtUtc.Value - timeProvider.GetUtcNow()).TotalSeconds));
+        AutoRefreshCountdownText = $"Next refresh in {seconds}s";
+    }
+
+    public void Dispose()
+    {
+        if (disposed)
+        {
+            return;
+        }
+
+        disposed = true;
+        autoRefreshTimer.Stop();
+        autoRefreshTimer.Tick -= AutoRefreshTimer_Tick;
+        settingsSaveTimer.Stop();
+        settingsSaveTimer.Tick -= SettingsSaveTimer_Tick;
+        if (settingsDirty)
+        {
+            try
+            {
+                applicationSettings.SaveAsync(
+                    new ApplicationPreferences
+                    {
+                        DateMode = dateDisplayMode,
+                        AutoRefreshEnabled = autoRefreshEnabled,
+                        AutoRefreshIntervalSeconds = autoRefreshIntervalSeconds,
+                        MinimizeToTray = minimizeToTray,
+                        ShowNetworkAccessHintOnBadRequest = showNetworkAccessHintOnBadRequest,
+                    },
+                    CancellationToken.None).GetAwaiter().GetResult();
+            }
+            catch
+            {
+                // The most recent successfully saved settings remain valid.
+            }
+        }
+
+        GC.SuppressFinalize(this);
+    }
 
     private AuditEvent Audit(string action, Guid entityId, string correlationId) =>
         new(timeProvider.GetUtcNow(), identityProvider.GetCurrentIdentity(), action, "Configuration", entityId.ToString("D"), "Succeeded", correlationId);

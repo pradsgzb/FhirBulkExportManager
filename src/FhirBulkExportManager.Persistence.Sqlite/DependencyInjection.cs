@@ -26,7 +26,9 @@ public static class DependencyInjection
 
         services.AddPooledDbContextFactory<ExportDbContext>(builder => builder.UseSqlite(connectionString, sqlite => sqlite.MigrationsAssembly(typeof(ExportDbContext).Assembly.GetName().Name!)));
         services.AddSingleton<IExportStore, SqliteExportStore>();
-        services.AddSingleton<IConfigurationStore, SqliteConfigurationStore>();
+        services.AddSingleton<SqliteConfigurationStore>();
+        services.AddSingleton<IConfigurationStore>(provider => provider.GetRequiredService<SqliteConfigurationStore>());
+        services.AddSingleton<IApplicationSettingsStore>(provider => provider.GetRequiredService<SqliteConfigurationStore>());
         services.AddSingleton<IDatabaseLifecycle, SqliteDatabaseLifecycle>();
         return services;
     }

@@ -10,6 +10,39 @@
             <TextBlock Text="{Binding Job.Id}" Foreground="#475467" FontFamily="Consolas" />
         </StackPanel>
         <TabControl Grid.Row="1">
+            <TabItem Header="Dashboard">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="18">
+                        <Border Background="#ECFDF3" BorderBrush="#6CE9A6" BorderThickness="1" CornerRadius="4" Padding="16" Margin="0,0,0,14">
+                            <StackPanel>
+                                <TextBlock Text="LATEST SERVER STATUS (X-PROGRESS)" Foreground="#027A48" FontSize="11" FontWeight="SemiBold" />
+                                <TextBlock Text="{Binding Dashboard.LatestServerProgress}" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" Margin="0,4,0,0" />
+                            </StackPanel>
+                        </Border>
+                        <UniformGrid Columns="3">
+                            <Border Background="#F9FAFB" BorderBrush="#EAECF0" BorderThickness="1" CornerRadius="4" Margin="4" Padding="14">
+                                <StackPanel><TextBlock Text="FILES DOWNLOADED" Foreground="#667085" /><TextBlock Text="{Binding Dashboard.FileCompletionText}" FontSize="23" FontWeight="SemiBold" /><ProgressBar Value="{Binding Dashboard.FileCompletionPercent}" Maximum="100" Height="7" Margin="0,8,0,0" /></StackPanel>
+                            </Border>
+                            <Border Background="#F9FAFB" BorderBrush="#EAECF0" BorderThickness="1" CornerRadius="4" Margin="4" Padding="14">
+                                <StackPanel><TextBlock Text="DATA DOWNLOADED" Foreground="#667085" /><TextBlock Text="{Binding Dashboard.DataDownloadedText}" FontSize="18" FontWeight="SemiBold" TextWrapping="Wrap" /></StackPanel>
+                            </Border>
+                            <Border Background="#F9FAFB" BorderBrush="#EAECF0" BorderThickness="1" CornerRadius="4" Margin="4" Padding="14">
+                                <StackPanel><TextBlock Text="DOWNLOAD SPEED" Foreground="#667085" /><TextBlock Text="{Binding Dashboard.AverageDownloadSpeedText}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" /></StackPanel>
+                            </Border>
+                            <Border Background="#F9FAFB" BorderBrush="#EAECF0" BorderThickness="1" CornerRadius="4" Margin="4" Padding="14">
+                                <StackPanel><TextBlock Text="EXPORT SPEED (ESTIMATE)" Foreground="#667085" /><TextBlock Text="{Binding Dashboard.AverageExportSpeedText}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" /></StackPanel>
+                            </Border>
+                            <Border Background="#F9FAFB" BorderBrush="#EAECF0" BorderThickness="1" CornerRadius="4" Margin="4" Padding="14">
+                                <StackPanel><TextBlock Text="ESTIMATED REMAINING" Foreground="#667085" /><TextBlock Text="{Binding Dashboard.EstimatedCompletionText}" FontSize="16" FontWeight="SemiBold" TextWrapping="Wrap" /></StackPanel>
+                            </Border>
+                            <Border Background="#F9FAFB" BorderBrush="#EAECF0" BorderThickness="1" CornerRadius="4" Margin="4" Padding="14">
+                                <StackPanel><TextBlock Text="ELAPSED / NEXT CHECK" Foreground="#667085" /><TextBlock Text="{Binding Dashboard.ElapsedText}" FontSize="16" FontWeight="SemiBold" /><TextBlock Text="{Binding Dashboard.NextCheckText}" Foreground="#475467" TextWrapping="Wrap" /></StackPanel>
+                            </Border>
+                        </UniformGrid>
+                        <TextBlock Text="Speed and remaining-time values are estimates derived from preserved X-Progress samples and completed file transfers. Vendor-reported X-Progress remains authoritative." Foreground="#667085" FontStyle="Italic" TextWrapping="Wrap" Margin="4,14,4,0" />
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
             <TabItem Header="Overview">
                 <Grid Margin="18">
                     <Grid.ColumnDefinitions><ColumnDefinition Width="230" /><ColumnDefinition Width="*" /></Grid.ColumnDefinitions>
@@ -17,11 +50,11 @@
                     <TextBlock Text="Current state" /><TextBlock Grid.Column="1" Text="{Binding Job.State}" FontWeight="SemiBold" />
                     <TextBlock Grid.Row="1" Text="Export type" /><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding Job.ExportType}" />
                     <TextBlock Grid.Row="2" Text="Group ID" /><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding Job.GroupId}" />
-                    <TextBlock Grid.Row="3" Text="Created UTC" /><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Job.CreatedAtUtc, StringFormat={}{0:u}}" />
-                    <TextBlock Grid.Row="4" Text="Started UTC" /><TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Job.StartedAtUtc, StringFormat={}{0:u}}" />
-                    <TextBlock Grid.Row="5" Text="Last status UTC" /><TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Job.LastPolledAtUtc, StringFormat={}{0:u}}" />
-                    <TextBlock Grid.Row="6" Text="Next status UTC" /><TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Job.NextPollAtUtc, StringFormat={}{0:u}}" />
-                    <TextBlock Grid.Row="7" Text="Files / validated" /><TextBlock Grid.Row="7" Grid.Column="1"><Run Text="{Binding Job.OutputFileCount}" /><Run Text=" / " /><Run Text="{Binding Job.ValidatedFileCount}" /></TextBlock>
+                    <TextBlock Grid.Row="3" Text="Created" /><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding Job.CreatedAtUtc, Converter={StaticResource DateTimeDisplayConverter}}" />
+                    <TextBlock Grid.Row="4" Text="Started" /><TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding Job.StartedAtUtc, Converter={StaticResource DateTimeDisplayConverter}}" />
+                    <TextBlock Grid.Row="5" Text="Last status" /><TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding Job.LastPolledAtUtc, Converter={StaticResource DateTimeDisplayConverter}}" />
+                    <TextBlock Grid.Row="6" Text="Next status" /><TextBlock Grid.Row="6" Grid.Column="1" Text="{Binding Job.NextPollAtUtc, Converter={StaticResource DateTimeDisplayConverter}}" />
+                    <TextBlock Grid.Row="7" Text="Downloaded / total files" /><TextBlock Grid.Row="7" Grid.Column="1" Text="{Binding Dashboard.FileCompletionText}" />
                     <TextBlock Grid.Row="8" Text="Progress" /><TextBlock Grid.Row="8" Grid.Column="1" Text="{Binding Job.ProgressText}" />
                     <TextBlock Grid.Row="9" Text="Last error" /><TextBlock Grid.Row="9" Grid.Column="1" Text="{Binding Job.LastErrorMessage}" TextWrapping="Wrap" Foreground="{StaticResource DangerBrush}" />
                 </Grid>
@@ -29,7 +62,7 @@
             <TabItem Header="Timeline">
                 <DataGrid ItemsSource="{Binding Timeline}" Margin="8">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="UTC" Binding="{Binding TimestampUtc, StringFormat={}{0:u}}" Width="155" />
+                        <DataGridTextColumn Header="Time" Binding="{Binding TimestampUtc, Converter={StaticResource DateTimeDisplayConverter}}" Width="170" />
                         <DataGridTextColumn Header="Event" Binding="{Binding EventType}" Width="180" />
                         <DataGridTextColumn Header="From" Binding="{Binding PreviousState}" Width="120" />
                         <DataGridTextColumn Header="To" Binding="{Binding NewState}" Width="120" />

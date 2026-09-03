@@ -7,11 +7,12 @@ using FhirBulkExportManager.Shared;
 
 namespace FhirBulkExportManager.App.Wpf;
 
-public sealed class JobDetailViewModel(IExportStore exportStore) : ObservableObject
+public sealed class JobDetailViewModel(IExportStore exportStore, TimeProvider timeProvider) : ObservableObject
 {
     private ExportJob? job;
     private string manifestText = string.Empty;
     private string diagnosticsText = string.Empty;
+    private JobDashboardSnapshot dashboard = JobDashboardSnapshot.Empty;
 
     public ExportJob? Job { get => job; private set => SetProperty(ref job, value); }
     public ObservableCollection<ExportFile> Files { get; } = [];
@@ -19,6 +20,7 @@ public sealed class JobDetailViewModel(IExportStore exportStore) : ObservableObj
     public ObservableCollection<ExportJobEvent> Timeline { get; } = [];
     public string ManifestText { get => manifestText; private set => SetProperty(ref manifestText, value); }
     public string DiagnosticsText { get => diagnosticsText; private set => SetProperty(ref diagnosticsText, value); }
+    public JobDashboardSnapshot Dashboard { get => dashboard; private set => SetProperty(ref dashboard, value); }
 
     public async Task LoadAsync(Guid jobId, CancellationToken cancellationToken)
     {
@@ -29,6 +31,7 @@ public sealed class JobDetailViewModel(IExportStore exportStore) : ObservableObj
         Replace(Files, files);
         Replace(ErrorFiles, files.Where(x => x.Category == ExportFileCategory.Error));
         Replace(Timeline, events);
+        Dashboard = JobProgressAnalytics.Calculate(Job, events, files, timeProvider.GetUtcNow());
         ManifestText = PrettyJson(Job.ManifestJson);
         DiagnosticsText = JsonSerializer.Serialize(new
         {
@@ -65,4 +68,3 @@ public sealed class JobDetailViewModel(IExportStore exportStore) : ObservableObj
         }
     }
 }
-

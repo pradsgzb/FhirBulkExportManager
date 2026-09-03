@@ -134,6 +134,12 @@ public sealed class ApplicationSetting
     public string Key { get; private set; } = string.Empty;
     public string Value { get; private set; } = string.Empty;
     public DateTimeOffset UpdatedAtUtc { get; private set; }
+
+    public void Update(string value, DateTimeOffset updatedAtUtc)
+    {
+        Value = value ?? throw new ArgumentNullException(nameof(value));
+        UpdatedAtUtc = updatedAtUtc;
+    }
 }
 
 public sealed class PluginConfiguration
