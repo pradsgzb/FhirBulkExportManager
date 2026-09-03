@@ -1,0 +1,7 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>FhirBulkExportManager.Shared</AssemblyName>
+    <RootNamespace>FhirBulkExportManager.Shared</RootNamespace>
+  </PropertyGroup>
+</Project>
+

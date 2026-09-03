@@ -1,0 +1,12 @@
+{
+  "id": "eclinicalworks",
+  "name": "eClinicalWorks Bulk Data",
+  "version": "1.0.0",
+  "minimumHostVersion": "1.0.0",
+  "maximumHostVersion": null,
+  "entryAssembly": "FhirBulkExportManager.Plugin.EClinicalWorks.dll",
+  "vendor": "eClinicalWorks",
+  "publisher": "FHIR Bulk Export Manager Engineering",
+  "sha256": null,
+  "enabled": true
+}

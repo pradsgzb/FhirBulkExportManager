@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  qualify-and-package:
+    runs-on: windows-latest
+    environment: production-release
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore, build, and test
+        shell: pwsh
+        run: |
+          dotnet restore FhirBulkExportManager.sln
+          dotnet build FhirBulkExportManager.sln -c Release --no-restore
+          dotnet test FhirBulkExportManager.sln -c Release --no-build --logger trx --results-directory TestResults
+
+      - name: Publish Windows application
+        run: dotnet publish src/FhirBulkExportManager.App.Wpf/FhirBulkExportManager.App.Wpf.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=false -o artifacts/publish
+
+      - name: Generate SBOM
+        shell: pwsh
+        run: |
+          dotnet tool install --global Microsoft.Sbom.DotNetTool
+          sbom-tool generate -b artifacts/publish -bc . -pn EnterpriseFhirBulkExportManager -pv $env:GITHUB_REF_NAME -ps FhirBulkExportManager -m artifacts/publish/_manifest
+
+      - name: Build MSIX
+        shell: pwsh
+        env:
+          MSIX_PUBLISHER: ${{ secrets.MSIX_PUBLISHER }}
+        run: ./installer/Build-Msix.ps1 -PublishDirectory artifacts/publish -OutputPath artifacts/EnterpriseFhirBulkExportManager.msix -Publisher $env:MSIX_PUBLISHER
+
+      - name: Sign MSIX when signing credential is configured
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.CODE_SIGNING_PFX_BASE64 }}
+          PFX_PASSWORD: ${{ secrets.CODE_SIGNING_PFX_PASSWORD }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:PFX_BASE64)) {
+            Write-Host "Signing credential is not configured; leaving the package unsigned."
+            exit 0
+          }
+          $pfx = Join-Path $env:RUNNER_TEMP signing.pfx
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:PFX_BASE64))
+          & signtool sign /fd SHA256 /f $pfx /p $env:PFX_PASSWORD artifacts/EnterpriseFhirBulkExportManager.msix
+          Remove-Item $pfx -Force
+
+      - name: Generate release checksums
+        shell: pwsh
+        run: |
+          Get-FileHash artifacts/EnterpriseFhirBulkExportManager.msix -Algorithm SHA256 | ForEach-Object { "$($_.Hash.ToLower())  EnterpriseFhirBulkExportManager.msix" } | Set-Content artifacts/checksums.sha256 -Encoding ascii
+
+      - name: Upload qualified artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: EnterpriseFhirBulkExportManager-${{ github.ref_name }}
+          path: |
+            artifacts/EnterpriseFhirBulkExportManager.msix
+            artifacts/checksums.sha256
+            artifacts/publish/_manifest
+            TestResults
+
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          fail_on_unmatched_files: true
+          files: |
+            artifacts/EnterpriseFhirBulkExportManager.msix
+            artifacts/checksums.sha256

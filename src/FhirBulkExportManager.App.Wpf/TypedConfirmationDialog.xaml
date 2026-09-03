@@ -1,0 +1,23 @@
+<Window x:Class="FhirBulkExportManager.App.Wpf.TypedConfirmationDialog"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Confirm operation" Height="300" Width="560" WindowStartupLocation="CenterOwner"
+        ResizeMode="NoResize" ShowInTaskbar="False">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <TextBlock x:Name="MessageText" TextWrapping="Wrap" FontSize="14" />
+        <StackPanel Grid.Row="1" Margin="0,14,0,8">
+            <TextBlock x:Name="InstructionText" FontWeight="SemiBold" />
+            <TextBox x:Name="ConfirmationBox" Margin="0,6,0,0" AutomationProperties.Name="Typed confirmation" />
+        </StackPanel>
+        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+            <Button Content="Cancel" IsCancel="True" MinWidth="90" />
+            <Button Content="Confirm" IsDefault="True" MinWidth="90" Click="Confirm_Click" />
+        </StackPanel>
+    </Grid>
+</Window>
+

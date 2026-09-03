@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <AssemblyName>FhirBulkExportManager.App.Wpf</AssemblyName>
+    <RootNamespace>FhirBulkExportManager.App.Wpf</RootNamespace>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FhirBulkExportManager.Application/FhirBulkExportManager.Application.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.Domain/FhirBulkExportManager.Domain.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.Infrastructure/FhirBulkExportManager.Infrastructure.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.Persistence.Sqlite/FhirBulkExportManager.Persistence.Sqlite.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.PluginHost/FhirBulkExportManager.PluginHost.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.Worker/FhirBulkExportManager.Worker.csproj" />
+    <ProjectReference Include="../../plugins/FhirBulkExportManager.Plugin.EClinicalWorks/FhirBulkExportManager.Plugin.EClinicalWorks.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

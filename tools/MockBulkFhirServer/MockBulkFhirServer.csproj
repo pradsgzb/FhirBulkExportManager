@@ -1,0 +1,6 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <AssemblyName>MockBulkFhirServer</AssemblyName>
+    <RootNamespace>MockBulkFhirServer</RootNamespace>
+  </PropertyGroup>
+</Project>

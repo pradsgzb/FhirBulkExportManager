@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  security-events: write
+
+jobs:
+  build-test:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: Directory.Packages.props
+
+      - name: Restore
+        run: dotnet restore FhirBulkExportManager.sln
+
+      - name: Dependency vulnerability audit
+        shell: pwsh
+        run: |
+          $output = dotnet list FhirBulkExportManager.sln package --vulnerable --include-transitive 2>&1 | Out-String
+          $output
+          if ($output -match 'has the following vulnerable packages') { throw 'Vulnerable NuGet dependency detected.' }
+
+      - name: Build Release
+        run: dotnet build FhirBulkExportManager.sln --configuration Release --no-restore
+
+      - name: Test with coverage
+        run: dotnet test FhirBulkExportManager.sln --configuration Release --no-build --logger "trx;LogFilePrefix=tests" --collect "XPlat Code Coverage" --results-directory TestResults
+
+      - name: Verify repository invariants
+        shell: pwsh
+        run: ./scripts/verify-repository.ps1
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: TestResults
+
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Scan repository history for secrets
+        uses: gitleaks/gitleaks-action@v2
+

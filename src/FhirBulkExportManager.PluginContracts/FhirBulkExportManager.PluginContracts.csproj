@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>FhirBulkExportManager.PluginContracts</AssemblyName>
+    <RootNamespace>FhirBulkExportManager.PluginContracts</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FhirBulkExportManager.Shared/FhirBulkExportManager.Shared.csproj" />
+  </ItemGroup>
+</Project>
+

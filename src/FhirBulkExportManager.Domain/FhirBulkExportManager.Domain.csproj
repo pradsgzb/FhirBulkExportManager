@@ -1,0 +1,10 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>FhirBulkExportManager.Domain</AssemblyName>
+    <RootNamespace>FhirBulkExportManager.Domain</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FhirBulkExportManager.Shared/FhirBulkExportManager.Shared.csproj" />
+  </ItemGroup>
+</Project>
+

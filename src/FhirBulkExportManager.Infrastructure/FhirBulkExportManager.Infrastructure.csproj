@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>FhirBulkExportManager.Infrastructure</AssemblyName>
+    <RootNamespace>FhirBulkExportManager.Infrastructure</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FhirBulkExportManager.Application/FhirBulkExportManager.Application.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.Domain/FhirBulkExportManager.Domain.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.PluginContracts/FhirBulkExportManager.PluginContracts.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.Shared/FhirBulkExportManager.Shared.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Http" />
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
+  </ItemGroup>
+</Project>

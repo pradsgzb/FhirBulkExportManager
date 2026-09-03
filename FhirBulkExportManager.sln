@@ -1,0 +1,129 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.35931.197
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Shared", "src\FhirBulkExportManager.Shared\FhirBulkExportManager.Shared.csproj", "{A1000001-0000-4000-8000-000000000001}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Domain", "src\FhirBulkExportManager.Domain\FhirBulkExportManager.Domain.csproj", "{A1000002-0000-4000-8000-000000000002}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.PluginContracts", "src\FhirBulkExportManager.PluginContracts\FhirBulkExportManager.PluginContracts.csproj", "{A1000003-0000-4000-8000-000000000003}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Application", "src\FhirBulkExportManager.Application\FhirBulkExportManager.Application.csproj", "{A1000004-0000-4000-8000-000000000004}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Infrastructure", "src\FhirBulkExportManager.Infrastructure\FhirBulkExportManager.Infrastructure.csproj", "{A1000005-0000-4000-8000-000000000005}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Persistence.Sqlite", "src\FhirBulkExportManager.Persistence.Sqlite\FhirBulkExportManager.Persistence.Sqlite.csproj", "{A1000006-0000-4000-8000-000000000006}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.PluginHost", "src\FhirBulkExportManager.PluginHost\FhirBulkExportManager.PluginHost.csproj", "{A1000007-0000-4000-8000-000000000007}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Worker", "src\FhirBulkExportManager.Worker\FhirBulkExportManager.Worker.csproj", "{A1000008-0000-4000-8000-000000000008}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.App.Wpf", "src\FhirBulkExportManager.App.Wpf\FhirBulkExportManager.App.Wpf.csproj", "{A1000009-0000-4000-8000-000000000009}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Plugin.EClinicalWorks", "plugins\FhirBulkExportManager.Plugin.EClinicalWorks\FhirBulkExportManager.Plugin.EClinicalWorks.csproj", "{A1000010-0000-4000-8000-000000000010}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MockBulkFhirServer", "tools\MockBulkFhirServer\MockBulkFhirServer.csproj", "{A1000011-0000-4000-8000-000000000011}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Domain.Tests", "tests\FhirBulkExportManager.Domain.Tests\FhirBulkExportManager.Domain.Tests.csproj", "{A1000012-0000-4000-8000-000000000012}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Application.Tests", "tests\FhirBulkExportManager.Application.Tests\FhirBulkExportManager.Application.Tests.csproj", "{A1000013-0000-4000-8000-000000000013}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Infrastructure.Tests", "tests\FhirBulkExportManager.Infrastructure.Tests\FhirBulkExportManager.Infrastructure.Tests.csproj", "{A1000014-0000-4000-8000-000000000014}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Persistence.Tests", "tests\FhirBulkExportManager.Persistence.Tests\FhirBulkExportManager.Persistence.Tests.csproj", "{A1000015-0000-4000-8000-000000000015}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Plugin.EClinicalWorks.Tests", "tests\FhirBulkExportManager.Plugin.EClinicalWorks.Tests\FhirBulkExportManager.Plugin.EClinicalWorks.Tests.csproj", "{A1000016-0000-4000-8000-000000000016}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.IntegrationTests", "tests\FhirBulkExportManager.IntegrationTests\FhirBulkExportManager.IntegrationTests.csproj", "{A1000017-0000-4000-8000-000000000017}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.ArchitectureTests", "tests\FhirBulkExportManager.ArchitectureTests\FhirBulkExportManager.ArchitectureTests.csproj", "{A1000018-0000-4000-8000-000000000018}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "FhirBulkExportManager.Ui.Tests", "tests\FhirBulkExportManager.Ui.Tests\FhirBulkExportManager.Ui.Tests.csproj", "{A1000019-0000-4000-8000-000000000019}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{A1000001-0000-4000-8000-000000000001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000001-0000-4000-8000-000000000001}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000001-0000-4000-8000-000000000001}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000001-0000-4000-8000-000000000001}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000002-0000-4000-8000-000000000002}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000002-0000-4000-8000-000000000002}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000002-0000-4000-8000-000000000002}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000002-0000-4000-8000-000000000002}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000003-0000-4000-8000-000000000003}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000003-0000-4000-8000-000000000003}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000003-0000-4000-8000-000000000003}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000003-0000-4000-8000-000000000003}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000004-0000-4000-8000-000000000004}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000004-0000-4000-8000-000000000004}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000004-0000-4000-8000-000000000004}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000004-0000-4000-8000-000000000004}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000005-0000-4000-8000-000000000005}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000005-0000-4000-8000-000000000005}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000005-0000-4000-8000-000000000005}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000005-0000-4000-8000-000000000005}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000006-0000-4000-8000-000000000006}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000006-0000-4000-8000-000000000006}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000006-0000-4000-8000-000000000006}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000006-0000-4000-8000-000000000006}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000007-0000-4000-8000-000000000007}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000007-0000-4000-8000-000000000007}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000007-0000-4000-8000-000000000007}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000007-0000-4000-8000-000000000007}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000008-0000-4000-8000-000000000008}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000008-0000-4000-8000-000000000008}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000008-0000-4000-8000-000000000008}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000008-0000-4000-8000-000000000008}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000009-0000-4000-8000-000000000009}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000009-0000-4000-8000-000000000009}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000009-0000-4000-8000-000000000009}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000009-0000-4000-8000-000000000009}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000010-0000-4000-8000-000000000010}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000010-0000-4000-8000-000000000010}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000010-0000-4000-8000-000000000010}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000010-0000-4000-8000-000000000010}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000011-0000-4000-8000-000000000011}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000011-0000-4000-8000-000000000011}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000011-0000-4000-8000-000000000011}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000011-0000-4000-8000-000000000011}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000012-0000-4000-8000-000000000012}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000012-0000-4000-8000-000000000012}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000012-0000-4000-8000-000000000012}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000012-0000-4000-8000-000000000012}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000013-0000-4000-8000-000000000013}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000013-0000-4000-8000-000000000013}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000013-0000-4000-8000-000000000013}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000013-0000-4000-8000-000000000013}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000014-0000-4000-8000-000000000014}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000014-0000-4000-8000-000000000014}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000014-0000-4000-8000-000000000014}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000014-0000-4000-8000-000000000014}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000015-0000-4000-8000-000000000015}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000015-0000-4000-8000-000000000015}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000015-0000-4000-8000-000000000015}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000015-0000-4000-8000-000000000015}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000016-0000-4000-8000-000000000016}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000016-0000-4000-8000-000000000016}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000016-0000-4000-8000-000000000016}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000016-0000-4000-8000-000000000016}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000017-0000-4000-8000-000000000017}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000017-0000-4000-8000-000000000017}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000017-0000-4000-8000-000000000017}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000017-0000-4000-8000-000000000017}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000018-0000-4000-8000-000000000018}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000018-0000-4000-8000-000000000018}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000018-0000-4000-8000-000000000018}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000018-0000-4000-8000-000000000018}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1000019-0000-4000-8000-000000000019}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1000019-0000-4000-8000-000000000019}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1000019-0000-4000-8000-000000000019}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1000019-0000-4000-8000-000000000019}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal

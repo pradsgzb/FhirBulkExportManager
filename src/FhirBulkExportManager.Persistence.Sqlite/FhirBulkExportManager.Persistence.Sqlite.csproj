@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <AssemblyName>FhirBulkExportManager.Persistence.Sqlite</AssemblyName>
+    <RootNamespace>FhirBulkExportManager.Persistence.Sqlite</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../FhirBulkExportManager.Application/FhirBulkExportManager.Application.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.Domain/FhirBulkExportManager.Domain.csproj" />
+    <ProjectReference Include="../FhirBulkExportManager.Shared/FhirBulkExportManager.Shared.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Design">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Microsoft.Extensions.Hosting" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+</Project>
