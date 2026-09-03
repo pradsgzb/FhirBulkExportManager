@@ -17,6 +17,7 @@ namespace FhirBulkExportManager.App.Wpf;
 
 public sealed class MainViewModel : ObservableObject
 {
+    private const string DefaultEClinicalWorksTokenEndpoint = "https://oauthserver.eclinicalworks.com/oauth/oauth2/token";
     private readonly ExportJobService jobService;
     private readonly IConfigurationStore configurationStore;
     private readonly ISecretStore secretStore;
@@ -33,6 +34,10 @@ public sealed class MainViewModel : ObservableObject
     private HttpExchangeViewItem? selectedHttpExchange;
     private string jobDetailStatus = "Select a job to inspect its history.";
     private long jobDetailLoadGeneration;
+    private string connectionMetadataStatus = "Select a connection to view its saved metadata status.";
+    private string connectionMetadataJson = string.Empty;
+    private string connectionMetadataHttpHistoryText = string.Empty;
+    private long connectionMetadataLoadGeneration;
     private Vendor? selectedVendor;
     private Site? selectedSite;
     private CredentialProfile? selectedCredential;
@@ -117,7 +122,11 @@ public sealed class MainViewModel : ObservableObject
         CreateJobCommand = new AsyncRelayCommand(() => RunAsync(CreateJobAsync));
         ImportExistingCommand = new AsyncRelayCommand(() => RunAsync(ImportExistingExportAsync));
         StartCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.StartAsync(job.Id, CancellationToken.None))), () => SelectedJob?.State == ExportJobState.Draft);
-        StatusNowCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.GetStatusNowAsync(job.Id, CancellationToken.None))), () => SelectedJob is { HasConfirmedRemoteJob: true, State: ExportJobState.WaitingForPoll or ExportJobState.Running or ExportJobState.RetryPending });
+        StatusNowCommand = new AsyncRelayCommand(
+            () => RunAsync(() => RunSelectedAsync(job => jobService.GetStatusNowAsync(job.Id, CancellationToken.None))),
+            () => SelectedJob is { HasConfirmedRemoteJob: true } job &&
+                  (job.State is ExportJobState.WaitingForPoll or ExportJobState.Running or ExportJobState.RetryPending ||
+                   job.State == ExportJobState.FailedPermanent && job.ManifestJson is null));
         PauseCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.PauseAsync(job.Id, CancellationToken.None))), () => SelectedJob?.State is ExportJobState.Queued or ExportJobState.Authenticating or ExportJobState.Running or ExportJobState.WaitingForPoll or ExportJobState.QueuedForDownload or ExportJobState.Downloading);
         ResumeCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.ResumeAsync(job.Id, CancellationToken.None))), () => SelectedJob?.State == ExportJobState.Paused);
         CancelRemoteCommand = new AsyncRelayCommand(() => RunAsync(CancelRemoteAsync), () => SelectedJob is { HasConfirmedRemoteJob: true, State: ExportJobState.Running or ExportJobState.WaitingForPoll or ExportJobState.Paused or ExportJobState.Unknown });
@@ -132,6 +141,11 @@ public sealed class MainViewModel : ObservableObject
         DeleteConnectionCommand = new AsyncRelayCommand(() => RunAsync(DeleteSelectedConnectionAsync), () => SelectedConnectionSite is not null);
         NewConnectionCommand = new AsyncRelayCommand(() => RunAsync(ResetConnectionEditorAsync));
         TestConnectionCommand = new AsyncRelayCommand(() => RunAsync(TestConnectionAsync), () => SelectedConnectionSite is not null);
+        CopyHttpRequestCommand = new AsyncRelayCommand(() => RunAsync(() => CopyTextAsync(SelectedHttpExchange?.RequestText, "HTTP request")), () => SelectedHttpExchange is not null);
+        CopyHttpResponseCommand = new AsyncRelayCommand(() => RunAsync(() => CopyTextAsync(SelectedHttpExchange?.ResponseText, "HTTP response")), () => SelectedHttpExchange is not null);
+        CopyHttpExchangeCommand = new AsyncRelayCommand(() => RunAsync(() => CopyTextAsync(SelectedHttpExchange?.AllText, "complete HTTP exchange")), () => SelectedHttpExchange is not null);
+        CopyConnectionMetadataCommand = new AsyncRelayCommand(() => RunAsync(() => CopyTextAsync(ConnectionMetadataJson, "saved CapabilityStatement")), () => !string.IsNullOrWhiteSpace(ConnectionMetadataJson));
+        CopyConnectionMetadataHttpCommand = new AsyncRelayCommand(() => RunAsync(() => CopyTextAsync(ConnectionMetadataHttpHistoryText, "metadata HTTP history")), () => !string.IsNullOrWhiteSpace(ConnectionMetadataHttpHistoryText));
     }
 
     public ObservableCollection<ExportJob> Jobs { get; } = [];
@@ -163,6 +177,11 @@ public sealed class MainViewModel : ObservableObject
     public ICommand DeleteConnectionCommand { get; }
     public ICommand NewConnectionCommand { get; }
     public ICommand TestConnectionCommand { get; }
+    public ICommand CopyHttpRequestCommand { get; }
+    public ICommand CopyHttpResponseCommand { get; }
+    public ICommand CopyHttpExchangeCommand { get; }
+    public ICommand CopyConnectionMetadataCommand { get; }
+    public ICommand CopyConnectionMetadataHttpCommand { get; }
 
     public int ConfiguredExportLimit { get; }
     public int EffectiveExportLimit { get; }
@@ -202,7 +221,13 @@ public sealed class MainViewModel : ObservableObject
     public HttpExchangeViewItem? SelectedHttpExchange
     {
         get => selectedHttpExchange;
-        set => SetProperty(ref selectedHttpExchange, value);
+        set
+        {
+            if (SetProperty(ref selectedHttpExchange, value))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
     }
 
     public string JobDetailStatus { get => jobDetailStatus; private set => SetProperty(ref jobDetailStatus, value); }
@@ -248,8 +273,37 @@ public sealed class MainViewModel : ObservableObject
         }
     }
     public CredentialProfile? SelectedImportCredential { get => selectedImportCredential; set => SetProperty(ref selectedImportCredential, value); }
-    public Vendor? SelectedConnectionVendor { get => selectedConnectionVendor; set { if (SetProperty(ref selectedConnectionVendor, value)) CommandManager.InvalidateRequerySuggested(); } }
-    public Site? SelectedConnectionSite { get => selectedConnectionSite; set { if (SetProperty(ref selectedConnectionSite, value)) CommandManager.InvalidateRequerySuggested(); } }
+    public Vendor? SelectedConnectionVendor
+    {
+        get => selectedConnectionVendor;
+        set
+        {
+            if (SetProperty(ref selectedConnectionVendor, value))
+            {
+                if (!IsEditingConnection)
+                {
+                    ConnectionTokenEndpoint = string.Equals(value?.PluginId, "eclinicalworks", StringComparison.Ordinal)
+                        ? DefaultEClinicalWorksTokenEndpoint
+                        : string.Empty;
+                }
+
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
+    public Site? SelectedConnectionSite
+    {
+        get => selectedConnectionSite;
+        set
+        {
+            if (SetProperty(ref selectedConnectionSite, value))
+            {
+                CommandManager.InvalidateRequerySuggested();
+                var generation = Interlocked.Increment(ref connectionMetadataLoadGeneration);
+                _ = LoadConnectionMetadataAsync(value, generation);
+            }
+        }
+    }
     public string SearchText { get => searchText; set => SetProperty(ref searchText, value); }
     public string StatusMessage { get => statusMessage; private set => SetProperty(ref statusMessage, value); }
     public string NewJobName { get => newJobName; set => SetProperty(ref newJobName, value); }
@@ -284,13 +338,36 @@ public sealed class MainViewModel : ObservableObject
     public string ConnectionScope { get => connectionScope; set => SetProperty(ref connectionScope, value); }
     public string ConnectionAudience { get => connectionAudience; set => SetProperty(ref connectionAudience, value); }
     public string ConnectionAuthConfigurationJson { get => connectionAuthConfigurationJson; set => SetProperty(ref connectionAuthConfigurationJson, value); }
+    public string ConnectionMetadataStatus { get => connectionMetadataStatus; private set => SetProperty(ref connectionMetadataStatus, value); }
+    public string ConnectionMetadataJson
+    {
+        get => connectionMetadataJson;
+        private set
+        {
+            if (SetProperty(ref connectionMetadataJson, value))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
+    public string ConnectionMetadataHttpHistoryText
+    {
+        get => connectionMetadataHttpHistoryText;
+        private set
+        {
+            if (SetProperty(ref connectionMetadataHttpHistoryText, value))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
     public bool IsEditingConnection => editingConnectionSiteId is not null;
     public bool CanChangeConnectionVendor => !IsEditingConnection;
     public string ConnectionEditorTitle => IsEditingConnection ? "Edit Selected Connection" : "Create New Connection";
     public string ConnectionSaveButtonText => IsEditingConnection ? "Save Connection Changes" : "Create Connection";
 
     public int DraftCount => Jobs.Count(x => x.State == ExportJobState.Draft);
-    public int ActiveCount => Jobs.Count(x => !x.IsTerminal && x.State is not ExportJobState.Draft and not ExportJobState.Paused and not ExportJobState.HeldForReview and not ExportJobState.Unknown);
+    public int ActiveCount => Jobs.Count(x => !x.IsTerminal && x.State is not ExportJobState.Draft and not ExportJobState.Paused and not ExportJobState.HeldForReview and not ExportJobState.Unknown and not ExportJobState.FailedPermanent);
     public int DownloadingCount => Jobs.Count(x => x.State is ExportJobState.QueuedForDownload or ExportJobState.Downloading or ExportJobState.Validating);
     public int HeldCount => Jobs.Count(x => x.State == ExportJobState.HeldForReview);
     public int FailedCount => Jobs.Count(x => x.State is ExportJobState.FailedPermanent or ExportJobState.Expired or ExportJobState.Unknown);
@@ -798,7 +875,9 @@ public sealed class MainViewModel : ObservableObject
         ConnectionClientId = string.Empty;
         ConnectionClientSecret = string.Empty;
         ConnectionRemoveStoredSecret = false;
-        ConnectionTokenEndpoint = string.Empty;
+        ConnectionTokenEndpoint = string.Equals(SelectedConnectionVendor?.PluginId, "eclinicalworks", StringComparison.Ordinal)
+            ? DefaultEClinicalWorksTokenEndpoint
+            : string.Empty;
         ConnectionAssertionEndpoint = string.Empty;
         ConnectionScope = string.Empty;
         ConnectionAudience = string.Empty;
@@ -834,16 +913,152 @@ public sealed class MainViewModel : ObservableObject
         var site = SelectedConnectionSite ?? throw new InvalidOperationException("Select a site.");
         var vendor = await configurationStore.GetVendorAsync(site.VendorId, CancellationToken.None).ConfigureAwait(true)
             ?? throw new InvalidOperationException("Vendor is missing.");
+        var credential = await configurationStore.GetCredentialProfileAsync(site.CredentialProfileId, CancellationToken.None).ConfigureAwait(true)
+            ?? throw new InvalidOperationException("Credential profile is missing.");
         var plugin = pluginCatalog.GetRequired(vendor.PluginId, vendor.PluginVersion);
         var context = new VendorSiteContext(vendor.Id, site.Id, new Uri(site.FhirBaseUrl), site.TenantIdentifier, site.PracticeCode, "{}");
         var result = await plugin.TestConnectionAsync(context, token: null, cancellationToken: CancellationToken.None).ConfigureAwait(true);
+        var now = timeProvider.GetUtcNow();
+        var anonymous = string.Equals(credential.AuthenticationType, "None", StringComparison.OrdinalIgnoreCase);
+        var advertisedTokenEndpoint = result.DiscoveredTokenEndpoint;
+        var tokenEndpointUpdated = false;
+        var endpointWarning = string.Empty;
+        if (result.Succeeded && !anonymous && !string.IsNullOrWhiteSpace(advertisedTokenEndpoint))
+        {
+            try
+            {
+                var discoveredTokenEndpoint = Guard.AbsoluteHttpsUri(
+                    advertisedTokenEndpoint,
+                    nameof(result.DiscoveredTokenEndpoint),
+                    allowLoopbackHttp: true).AbsoluteUri;
+                tokenEndpointUpdated = !string.Equals(credential.TokenEndpoint, discoveredTokenEndpoint, StringComparison.OrdinalIgnoreCase);
+                credential.Update(
+                    credential.Name,
+                    credential.AuthenticationType,
+                    credential.ClientId,
+                    credential.SecretReference,
+                    discoveredTokenEndpoint,
+                    now,
+                    credential.Scope,
+                    credential.Audience,
+                    credential.AssertionEndpoint,
+                    credential.AdditionalConfigurationJson);
+            }
+            catch (ArgumentException)
+            {
+                endpointWarning = " Metadata advertised a non-HTTPS or invalid OAuth token endpoint; the existing configured value was retained.";
+            }
+        }
+
+        var attempt = new ConnectionMetadataAttempt(
+            now,
+            result.Succeeded,
+            result.StatusCode is { } statusCode ? (int)statusCode : null,
+            result.Summary,
+            result.HttpExchanges ?? []);
+        var correlation = Guid.NewGuid().ToString("N");
+        await configurationStore.RecordConnectionMetadataAsync(
+            vendor.PluginId,
+            site.Id,
+            credential,
+            attempt,
+            result.SanitizedCapabilityStatementJson,
+            advertisedTokenEndpoint,
+            Audit("ConnectionMetadataRecorded", site.Id, correlation),
+            CancellationToken.None).ConfigureAwait(true);
+        if (tokenEndpointUpdated)
+        {
+            tokenProvider.Invalidate(credential.Id);
+            if (editingConnectionSiteId == site.Id)
+            {
+                ConnectionTokenEndpoint = credential.TokenEndpoint;
+            }
+        }
+
+        var generation = Interlocked.Increment(ref connectionMetadataLoadGeneration);
+        await LoadConnectionMetadataAsync(site, generation).ConfigureAwait(true);
         if (!result.Succeeded)
         {
             throw new InvalidOperationException(result.Summary);
         }
 
-        dialogs.ShowInfo("Connection succeeded", result.Summary + " No export was created.");
-        StatusMessage = result.Summary;
+        var endpointMessage = tokenEndpointUpdated
+            ? $" OAuth token endpoint updated from metadata to {credential.TokenEndpoint}."
+            : !anonymous && string.IsNullOrWhiteSpace(advertisedTokenEndpoint)
+                ? " Metadata did not advertise an OAuth token endpoint; the existing configured value was retained."
+                : endpointWarning;
+        dialogs.ShowInfo("Connection succeeded", result.Summary + endpointMessage + " Metadata and the complete HTTP exchange were saved. No export was created.");
+        StatusMessage = result.Summary + endpointMessage;
+    }
+
+    private async Task LoadConnectionMetadataAsync(Site? site, long generation)
+    {
+        if (site is null)
+        {
+            ConnectionMetadataJson = string.Empty;
+            ConnectionMetadataHttpHistoryText = string.Empty;
+            ConnectionMetadataStatus = "Select a connection to view its saved metadata status.";
+            return;
+        }
+
+        ConnectionMetadataStatus = "Loading saved metadata…";
+        try
+        {
+            var vendor = Vendors.FirstOrDefault(x => x.Id == site.VendorId)
+                ?? await configurationStore.GetVendorAsync(site.VendorId, CancellationToken.None).ConfigureAwait(true)
+                ?? throw new InvalidOperationException("Vendor is missing.");
+            var history = await configurationStore.GetConnectionMetadataAsync(vendor.PluginId, site.Id, CancellationToken.None).ConfigureAwait(true);
+            if (generation != Interlocked.Read(ref connectionMetadataLoadGeneration) || SelectedConnectionSite?.Id != site.Id)
+            {
+                return;
+            }
+
+            if (history is null)
+            {
+                ConnectionMetadataJson = string.Empty;
+                ConnectionMetadataHttpHistoryText = string.Empty;
+                ConnectionMetadataStatus = "No metadata test has been saved for this connection.";
+                return;
+            }
+
+            ConnectionMetadataJson = history.LatestCapabilityStatementJson ?? string.Empty;
+            ConnectionMetadataHttpHistoryText = string.Join(
+                Environment.NewLine + Environment.NewLine + new string('=', 80) + Environment.NewLine + Environment.NewLine,
+                history.Attempts.SelectMany((attempt, attemptIndex) =>
+                    attempt.HttpExchanges.Select((exchange, exchangeIndex) =>
+                        $"Metadata test {attemptIndex + 1}, HTTP exchange {exchangeIndex + 1} · {attempt.RetrievedAtUtc:u} · {(attempt.Succeeded ? "Succeeded" : "Failed")}" +
+                        Environment.NewLine + new HttpExchangeViewItem(exchange).AllText)));
+            var latestAttempt = history.Attempts.LastOrDefault();
+            var endpoint = string.IsNullOrWhiteSpace(history.DiscoveredTokenEndpoint)
+                ? "not advertised"
+                : history.DiscoveredTokenEndpoint;
+            ConnectionMetadataStatus = latestAttempt is null
+                ? "Stored metadata history is empty."
+                : $"{history.Attempts.Count:N0} metadata test(s) preserved. Last test: {latestAttempt.RetrievedAtUtc:u} ({(latestAttempt.Succeeded ? "succeeded" : "failed")}). OAuth token endpoint: {endpoint}.";
+        }
+        catch (Exception exception)
+        {
+            if (generation != Interlocked.Read(ref connectionMetadataLoadGeneration))
+            {
+                return;
+            }
+
+            ConnectionMetadataJson = string.Empty;
+            ConnectionMetadataHttpHistoryText = string.Empty;
+            ConnectionMetadataStatus = "Could not load saved metadata: " + SecurityRedactor.Redact(exception.Message);
+        }
+    }
+
+    private Task CopyTextAsync(string? text, string description)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+        {
+            throw new InvalidOperationException($"No {description} is available to copy.");
+        }
+
+        System.Windows.Clipboard.SetText(text);
+        StatusMessage = $"Copied {description} to the clipboard with secrets redacted.";
+        return Task.CompletedTask;
     }
 
     private async Task RunAsync(Func<Task> action)

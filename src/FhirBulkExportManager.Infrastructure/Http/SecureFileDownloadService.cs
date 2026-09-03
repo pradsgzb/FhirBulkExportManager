@@ -42,7 +42,7 @@ public sealed class SecureFileDownloadService(IHttpClientFactory httpClientFacto
         if (!response.IsSuccessStatusCode)
         {
             var errorBody = await ReadRedirectBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
-            var message = $"FHIR file download returned {(int)response.StatusCode} {response.ReasonPhrase}.";
+            var message = $"FHIR file download returned {HttpStatusText.Format(response.StatusCode)}.";
             var failedExchanges = downloadResponse.RedirectExchanges
                 .Append(HttpExchangeCapture.Create(
                     "FHIR file download",

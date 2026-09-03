@@ -52,7 +52,7 @@ public static class HttpExchangeCapture
             CaptureHeaders(request.Headers, request.Content?.Headers),
             SanitizeBody(requestBody, request.Content?.Headers.ContentType?.MediaType),
             response is null ? null : (int)response.StatusCode,
-            response?.ReasonPhrase,
+            response is null ? null : HttpStatusText.CanonicalReasonPhrase(response.StatusCode),
             response is null ? [] : CaptureHeaders(response.Headers, response.Content.Headers, response.TrailingHeaders),
             SanitizeBody(responseBody, response?.Content.Headers.ContentType?.MediaType),
             responseBodyStorageReference,
@@ -264,7 +264,7 @@ public static class HttpExchangeCapture
 
     private static bool IsFormUrlEncoded(string? mediaType, string value) =>
         mediaType?.Equals("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase) == true ||
-        value.Contains('=') && value.Contains('&');
+        string.IsNullOrWhiteSpace(mediaType) && value.Contains('=') && value.Contains('&');
 
     private static bool LooksLikeJwt(string value)
     {

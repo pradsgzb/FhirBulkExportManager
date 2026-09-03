@@ -47,6 +47,11 @@ public sealed class JobHistoryViewModelTests
         var http = Assert.Single(item.HttpExchanges);
         Assert.Contains("X-Progress: 17% Completed", http.ResponseHeadersText, StringComparison.Ordinal);
         Assert.Equal("status body", http.ResponseBodyText);
+        Assert.Contains("GET https://example.test/status?job=123", http.RequestText, StringComparison.Ordinal);
+        Assert.Contains("Authorization: [REDACTED]", http.RequestText, StringComparison.Ordinal);
+        Assert.Contains("HTTP 202 Accepted", http.ResponseText, StringComparison.Ordinal);
+        Assert.Contains("REQUEST", http.AllText, StringComparison.Ordinal);
+        Assert.Contains("RESPONSE", http.AllText, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -78,5 +83,29 @@ public sealed class JobHistoryViewModelTests
         Assert.DoesNotContain("uri-secret", json, StringComparison.Ordinal);
         Assert.DoesNotContain("jwt-secret", json, StringComparison.Ordinal);
         Assert.DoesNotContain("body-secret", json, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Existing_exchange_with_wrong_reason_phrase_is_displayed_with_canonical_http_status()
+    {
+        var now = DateTimeOffset.UtcNow;
+        var exchange = new HttpExchangeContract(
+            "Bulk export status",
+            now,
+            now,
+            "GET",
+            "https://example.test/status",
+            [],
+            null,
+            400,
+            "OK",
+            [new HttpHeaderContract("Content-Type", ["text/html; charset=utf-8"])],
+            "<html><body>Bad request</body></html>");
+
+        var item = new HttpExchangeViewItem(exchange);
+
+        Assert.Equal("HTTP 400 Bad Request", item.ResponseStatus);
+        Assert.Contains("Content-Type: text/html; charset=utf-8", item.ResponseText, StringComparison.Ordinal);
+        Assert.Contains("<html><body>Bad request</body></html>", item.ResponseText, StringComparison.Ordinal);
     }
 }

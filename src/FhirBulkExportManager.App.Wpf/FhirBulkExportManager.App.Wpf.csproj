@@ -17,6 +17,9 @@
     <NeutralLanguage>en-US</NeutralLanguage>
   </PropertyGroup>
   <ItemGroup>
+    <None Remove="AppIcon.ico" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="../FhirBulkExportManager.Application/FhirBulkExportManager.Application.csproj" />
     <ProjectReference Include="../FhirBulkExportManager.Domain/FhirBulkExportManager.Domain.csproj" />
     <ProjectReference Include="../FhirBulkExportManager.Infrastructure/FhirBulkExportManager.Infrastructure.csproj" />
@@ -31,8 +34,6 @@
     <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
   </ItemGroup>
   <ItemGroup>
-    <Content Include="..\..\Assets\AppIcon.ico" Link="AppIcon.ico" />
-    <Content Include="AppIcon.ico" />
     <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>

@@ -169,7 +169,9 @@ public sealed class ExportJobService(
             throw new InvalidOperationException("Status cannot be requested before the exact Content-Location is persisted.");
         }
 
-        if (job.State is not (ExportJobState.WaitingForPoll or ExportJobState.Running or ExportJobState.RetryPending))
+        var recoveringRemoteStatusFailure = job.State == ExportJobState.FailedPermanent && job.ManifestJson is null;
+        if (job.State is not (ExportJobState.WaitingForPoll or ExportJobState.Running or ExportJobState.RetryPending) &&
+            !recoveringRemoteStatusFailure)
         {
             throw new InvalidOperationException($"Manual status is not valid while the job is {job.State}.");
         }
@@ -177,8 +179,13 @@ public sealed class ExportJobService(
         var expected = job.Version;
         var now = timeProvider.GetUtcNow();
         ExportJobEvent evt;
-        if (job.State == ExportJobState.WaitingForPoll)
+        if (job.State is ExportJobState.WaitingForPoll or ExportJobState.FailedPermanent)
         {
+            if (job.State == ExportJobState.FailedPermanent)
+            {
+                job.ClearFailure();
+            }
+
             evt = job.Transition(ExportJobState.Running, now, "ManualStatusRequested", "Operator requested an immediate status check.", Guid.NewGuid(), Guid.NewGuid().ToString("N"));
         }
         else

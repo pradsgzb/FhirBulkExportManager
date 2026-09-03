@@ -11,6 +11,7 @@ namespace FhirBulkExportManager.Plugin.EClinicalWorks;
 public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) : IVendorPlugin
 {
     private const int MaximumControlResponseBytes = 2 * 1024 * 1024;
+    private const int MaximumMetadataResponseBytes = 16 * 1024 * 1024;
     private static readonly MediaTypeWithQualityHeaderValue FhirJson = new("application/fhir+json");
     private static readonly MediaTypeWithQualityHeaderValue Json = new("application/json");
 
@@ -146,15 +147,49 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
         using var request = new HttpRequestMessage(HttpMethod.Get, metadataUri);
         request.Headers.Accept.Add(FhirJson);
         var startedAtUtc = DateTimeOffset.UtcNow;
-        using var response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
-        var body = await ReadSmallBodyAsync(response.Content, cancellationToken).ConfigureAwait(false);
-        var exchanges = new[]
+        HttpResponseMessage? response = null;
+        string? body = null;
+        try
         {
-            HttpExchangeCapture.Create("FHIR capability statement", startedAtUtc, DateTimeOffset.UtcNow, request, response, responseBody: body),
-        };
-        return response.IsSuccessStatusCode
-            ? new ConnectionTestResult(true, response.StatusCode, "FHIR metadata request succeeded without authentication.", body, exchanges)
-            : new ConnectionTestResult(false, response.StatusCode, $"FHIR metadata request returned {(int)response.StatusCode} {response.ReasonPhrase}.", null, exchanges);
+            response = await SendAsync(request, cancellationToken).ConfigureAwait(false);
+            body = await ReadSmallBodyAsync(response.Content, cancellationToken, MaximumMetadataResponseBytes).ConfigureAwait(false);
+            var exchanges = new[]
+            {
+                HttpExchangeCapture.Create("FHIR capability statement", startedAtUtc, DateTimeOffset.UtcNow, request, response, responseBody: body),
+            };
+            var tokenEndpoint = response.IsSuccessStatusCode
+                ? CapabilityStatementDiscovery.FindOAuthTokenEndpoint(body)
+                : null;
+            return response.IsSuccessStatusCode
+                ? new ConnectionTestResult(true, response.StatusCode, "FHIR metadata request succeeded without authentication.", body, exchanges, tokenEndpoint)
+                : new ConnectionTestResult(false, response.StatusCode, $"FHIR metadata request returned {HttpStatusText.Format(response.StatusCode)}.", null, exchanges);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception exception) when (exception is HttpRequestException or IOException or InvalidDataException or OperationCanceledException)
+        {
+            var exchange = HttpExchangeCapture.Create(
+                "FHIR capability statement",
+                startedAtUtc,
+                DateTimeOffset.UtcNow,
+                request,
+                response,
+                responseBody: body,
+                failure: exception.Message);
+            var statusCode = response?.StatusCode ?? (exception as HttpRequestException)?.StatusCode;
+            return new ConnectionTestResult(
+                false,
+                statusCode,
+                "FHIR metadata request failed: " + SecurityRedactor.Redact(exception.Message),
+                null,
+                [exchange]);
+        }
+        finally
+        {
+            response?.Dispose();
+        }
     }
 
     public async Task<KickoffResult> KickoffAsync(BulkExportKickoffRequest request, AccessToken token, TimeProvider timeProvider, CancellationToken cancellationToken)
@@ -193,7 +228,7 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
                 return new KickoffResult(KickoffDisposition.RetryLater, response.StatusCode, null, retryAt ?? now.AddSeconds(30), endpoint.AbsoluteUri, GetHeader(response, "X-Progress"), responseBody, "RemoteTransient", $"Kickoff returned {(int)response.StatusCode}.", exchanges);
             }
 
-            return new KickoffResult(KickoffDisposition.Rejected, response.StatusCode, null, null, endpoint.AbsoluteUri, GetHeader(response, "X-Progress"), responseBody, "KickoffRejected", $"Kickoff returned {(int)response.StatusCode} {response.ReasonPhrase}.", exchanges);
+            return new KickoffResult(KickoffDisposition.Rejected, response.StatusCode, null, null, endpoint.AbsoluteUri, GetHeader(response, "X-Progress"), responseBody, "KickoffRejected", $"Kickoff returned {HttpStatusText.Format(response.StatusCode)}.", exchanges);
         }
         catch (HttpRequestException exception)
         {
@@ -257,7 +292,7 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
                         return new PollResult(PollDisposition.RetryLater, response.StatusCode, retryAt ?? now.AddSeconds(30), progress, null, responseBody, "RemoteTransient", $"Status request returned {(int)response.StatusCode}.", exchanges);
                     }
 
-                    return new PollResult(PollDisposition.FailedPermanent, response.StatusCode, null, progress, null, responseBody, "RemoteRejected", $"Status request returned {(int)response.StatusCode} {response.ReasonPhrase}.", exchanges);
+                    return new PollResult(PollDisposition.FailedPermanent, response.StatusCode, null, progress, null, responseBody, "RemoteRejected", $"Status request returned {HttpStatusText.Format(response.StatusCode)}.", exchanges);
             }
         }
         catch (HttpRequestException exception)
@@ -390,7 +425,7 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
                 HttpExchangeCapture.Create("Remote DELETE", startedAtUtc, timeProvider.GetUtcNow(), request, response, responseBody: responseBody),
             };
             var success = response.IsSuccessStatusCode || response.StatusCode == HttpStatusCode.NotFound;
-            return new CleanupResult(success, response.StatusCode, success ? null : RetryAfterParser.Parse(response.Headers.RetryAfter, timeProvider.GetUtcNow()) ?? timeProvider.GetUtcNow().AddSeconds(30), success ? null : $"DELETE returned {(int)response.StatusCode} {response.ReasonPhrase}.", exchanges);
+            return new CleanupResult(success, response.StatusCode, success ? null : RetryAfterParser.Parse(response.Headers.RetryAfter, timeProvider.GetUtcNow()) ?? timeProvider.GetUtcNow().AddSeconds(30), success ? null : $"DELETE returned {HttpStatusText.Format(response.StatusCode)}.", exchanges);
         }
         catch (HttpRequestException exception)
         {
@@ -625,24 +660,8 @@ public sealed class EClinicalWorksPlugin(IHttpClientFactory httpClientFactory) :
     private Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
         httpClientFactory.CreateClient("VendorApi").SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
 
-    private static async Task<string> ReadSmallBodyAsync(HttpContent content, CancellationToken cancellationToken, int maximumBytes = MaximumControlResponseBytes)
-    {
-        await using var stream = await content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
-        using var buffer = new MemoryStream(capacity: Math.Min(maximumBytes, 64 * 1024));
-        var chunk = new byte[64 * 1024];
-        int read;
-        while ((read = await stream.ReadAsync(chunk, cancellationToken).ConfigureAwait(false)) > 0)
-        {
-            if (buffer.Length + read > maximumBytes)
-            {
-                throw new InvalidDataException($"FHIR control response exceeded the safe {maximumBytes}-byte limit.");
-            }
-
-            await buffer.WriteAsync(chunk.AsMemory(0, read), cancellationToken).ConfigureAwait(false);
-        }
-
-        return System.Text.Encoding.UTF8.GetString(buffer.GetBuffer(), 0, checked((int)buffer.Length));
-    }
+    private static Task<string> ReadSmallBodyAsync(HttpContent content, CancellationToken cancellationToken, int maximumBytes = MaximumControlResponseBytes) =>
+        BoundedHttpContentReader.ReadAsStringAsync(content, maximumBytes, cancellationToken);
 
     private static string? GetHeader(HttpResponseMessage response, string name) =>
         response.Headers.TryGetValues(name, out var values) ? values.FirstOrDefault() :

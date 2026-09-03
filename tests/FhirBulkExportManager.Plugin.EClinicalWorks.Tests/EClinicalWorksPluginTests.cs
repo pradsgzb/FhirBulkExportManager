@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text;
 using System.Text.Json;
 using FhirBulkExportManager.Plugin.EClinicalWorks;
 using FhirBulkExportManager.PluginContracts;
@@ -10,6 +11,27 @@ public sealed class EClinicalWorksPluginTests
     [Fact]
     public async Task Connection_test_requests_metadata_without_authentication()
     {
+        const string tokenEndpoint = "https://oauthserver.eclinicalworks.com/oauth/oauth2/token";
+        const string capabilityStatement = """
+            {
+              "resourceType": "CapabilityStatement",
+              "rest": [
+                {
+                  "security": {
+                    "extension": [
+                      {
+                        "url": "http://fhir-registry.smarthealthit.org/StructureDefinition/oauth-uris",
+                        "extension": [
+                          { "url": "authorize", "valueUri": "https://oauthserver.eclinicalworks.com/oauth/authorize" },
+                          { "url": "token", "valueUri": "https://oauthserver.eclinicalworks.com/oauth/oauth2/token" }
+                        ]
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+            """;
         var requestCount = 0;
         var handler = new StubHandler(request =>
         {
@@ -19,7 +41,7 @@ public sealed class EClinicalWorksPluginTests
             Assert.Null(request.Headers.Authorization);
             return new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new StringContent("{\"resourceType\":\"CapabilityStatement\"}"),
+                Content = new StringContent(capabilityStatement),
             };
         });
         var plugin = new EClinicalWorksPlugin(new StaticHttpClientFactory(new HttpClient(handler)));
@@ -33,6 +55,10 @@ public sealed class EClinicalWorksPluginTests
         Assert.True(result.Succeeded);
         Assert.Equal(1, requestCount);
         Assert.Contains("without authentication", result.Summary, StringComparison.Ordinal);
+        Assert.Equal(tokenEndpoint, result.DiscoveredTokenEndpoint);
+        var exchange = Assert.Single(result.HttpExchanges!);
+        Assert.NotNull(exchange.ResponseBody);
+        Assert.Contains(tokenEndpoint, exchange.ResponseBody, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -100,6 +126,23 @@ public sealed class EClinicalWorksPluginTests
         Assert.DoesNotContain(assertion, preservedHistory, StringComparison.Ordinal);
         Assert.DoesNotContain("access-token-for-test", preservedHistory, StringComparison.Ordinal);
         Assert.Contains("REDACTED", preservedHistory, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Connection_test_preserves_a_failed_metadata_request()
+    {
+        var handler = new StubHandler(_ => throw new HttpRequestException("Network route unavailable."));
+        var plugin = new EClinicalWorksPlugin(new StaticHttpClientFactory(new HttpClient(handler)));
+        var site = new VendorSiteContext(Guid.NewGuid(), Guid.NewGuid(), new Uri("https://example.test/fhir/r4/practice"), null, null, "{}");
+
+        var result = await plugin.TestConnectionAsync(site, token: null, CancellationToken.None);
+
+        Assert.False(result.Succeeded);
+        var exchange = Assert.Single(result.HttpExchanges!);
+        Assert.Equal("GET", exchange.RequestMethod);
+        Assert.Equal("https://example.test/fhir/r4/practice/metadata", exchange.RequestUri);
+        Assert.NotNull(exchange.Failure);
+        Assert.Contains("Network route unavailable", exchange.Failure, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -179,6 +222,42 @@ public sealed class EClinicalWorksPluginTests
             exchange.RequestHeaders,
             header => header.Name.Equals("Authorization", StringComparison.OrdinalIgnoreCase));
         Assert.Equal("[REDACTED]", Assert.Single(authorization.Values));
+    }
+
+    [Theory]
+    [InlineData("application/json", "{\"error\":\"location is not whitelisted\"}")]
+    [InlineData("application/xml", "<OperationOutcome><issue>location is not whitelisted</issue></OperationOutcome>")]
+    [InlineData("text/html", "<html><body>location is not whitelisted &amp; access=false</body></html>")]
+    [InlineData("text/plain", "location is not whitelisted")]
+    public async Task Poll_preserves_supported_error_body_types_and_uses_canonical_status(
+        string mediaType,
+        string responseBody)
+    {
+        var handler = new StubHandler(_ => new HttpResponseMessage(HttpStatusCode.BadRequest)
+        {
+            ReasonPhrase = "OK",
+            Content = new StringContent(responseBody, Encoding.UTF8, mediaType),
+        });
+        var plugin = new EClinicalWorksPlugin(new StaticHttpClientFactory(new HttpClient(handler)));
+        var site = new VendorSiteContext(Guid.NewGuid(), Guid.NewGuid(), new Uri("https://example.test/fhir/"), null, null, "{}");
+
+        var result = await plugin.PollAsync(
+            new Uri("https://example.test/export-status?job=opaque"),
+            site,
+            new AccessToken("access-token-for-test", DateTimeOffset.MaxValue),
+            TimeProvider.System,
+            CancellationToken.None);
+
+        Assert.Equal(PollDisposition.FailedPermanent, result.Disposition);
+        Assert.Equal("Status request returned 400 Bad Request.", result.SafeErrorMessage);
+        Assert.Equal(responseBody, result.OperationOutcomeJson);
+        var exchange = Assert.Single(result.HttpExchanges!);
+        Assert.Equal("Bad Request", exchange.ResponseReasonPhrase);
+        Assert.Equal(responseBody, exchange.ResponseBody);
+        Assert.Contains(
+            exchange.ResponseHeaders,
+            header => header.Name.Equals("Content-Type", StringComparison.OrdinalIgnoreCase) &&
+                      header.Values.Any(value => value.StartsWith(mediaType, StringComparison.OrdinalIgnoreCase)));
     }
 
     private static Dictionary<string, string> ParseForm(string body) =>

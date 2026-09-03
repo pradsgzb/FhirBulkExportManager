@@ -127,6 +127,19 @@ public sealed class FirstRunBootstrapperTests
             return Task.FromResult(new ConnectionDeleteResult(credentialDeleted));
         }
 
+        public Task<ConnectionMetadataHistory?> GetConnectionMetadataAsync(string pluginId, Guid siteId, CancellationToken cancellationToken) =>
+            Task.FromResult<ConnectionMetadataHistory?>(null);
+
+        public Task RecordConnectionMetadataAsync(
+            string pluginId,
+            Guid siteId,
+            CredentialProfile credentialProfile,
+            ConnectionMetadataAttempt attempt,
+            string? capabilityStatementJson,
+            string? discoveredTokenEndpoint,
+            AuditEvent auditEvent,
+            CancellationToken cancellationToken) => Task.CompletedTask;
+
         public Task<CredentialProfile?> GetCredentialProfileAsync(Guid id, CancellationToken cancellationToken) =>
             Task.FromResult(Credentials.SingleOrDefault(x => x.Id == id));
 

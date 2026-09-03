@@ -268,14 +268,15 @@ public sealed record ConnectionTestResult(
     HttpStatusCode? StatusCode,
     string Summary,
     string? SanitizedCapabilityStatementJson,
-    IReadOnlyList<HttpExchangeContract>? HttpExchanges = null)
+    IReadOnlyList<HttpExchangeContract>? HttpExchanges = null,
+    string? DiscoveredTokenEndpoint = null)
 {
     public ConnectionTestResult(
         bool succeeded,
         HttpStatusCode? statusCode,
         string summary,
         string? sanitizedCapabilityStatementJson)
-        : this(succeeded, statusCode, summary, sanitizedCapabilityStatementJson, null)
+        : this(succeeded, statusCode, summary, sanitizedCapabilityStatementJson, null, null)
     {
     }
 

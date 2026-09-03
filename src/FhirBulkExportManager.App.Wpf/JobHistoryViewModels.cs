@@ -59,13 +59,27 @@ public sealed class HttpExchangeViewItem
         ResponseHeadersText = FormatHeaders(exchange.ResponseHeaders);
         RequestBodyText = string.IsNullOrEmpty(exchange.RequestBody) ? "(no request body)" : exchange.RequestBody;
         ResponseBodyText = FormatResponseBody(exchange);
+        RequestText = JoinHttpMessage(RequestLine, RequestHeadersText, RequestBodyText);
+        ResponseText = JoinHttpMessage(ResponseStatus, ResponseHeadersText, ResponseBodyText);
+        var sections = new List<string>
+        {
+            "Operation: " + Exchange.Operation,
+            "Timing: " + Timing,
+        };
+        if (!string.IsNullOrWhiteSpace(Failure))
+        {
+            sections.Add(Failure);
+        }
+
+        sections.AddRange([string.Empty, "REQUEST", RequestText, string.Empty, "RESPONSE", ResponseText]);
+        AllText = string.Join(Environment.NewLine, sections);
     }
 
     public HttpExchangeContract Exchange { get; }
     public string Summary => $"{Exchange.Operation} · {Exchange.RequestMethod} · {ResponseStatus}";
     public string RequestLine => $"{Exchange.RequestMethod} {Exchange.RequestUri}";
     public string ResponseStatus => Exchange.ResponseStatusCode is { } statusCode
-        ? $"HTTP {statusCode} {Exchange.ResponseReasonPhrase}".TrimEnd()
+        ? "HTTP " + HttpStatusText.Format(statusCode)
         : "No HTTP response";
     public string Timing => $"{Exchange.StartedAtUtc:u} · {Math.Max(0, (Exchange.CompletedAtUtc - Exchange.StartedAtUtc).TotalMilliseconds):N0} ms";
     public string Failure => string.IsNullOrWhiteSpace(Exchange.Failure) ? string.Empty : "Failure: " + Exchange.Failure;
@@ -73,6 +87,12 @@ public sealed class HttpExchangeViewItem
     public string ResponseHeadersText { get; }
     public string RequestBodyText { get; }
     public string ResponseBodyText { get; }
+    public string RequestText { get; }
+    public string ResponseText { get; }
+    public string AllText { get; }
+
+    private static string JoinHttpMessage(string firstLine, string headers, string body) =>
+        string.Join(Environment.NewLine, firstLine, headers, string.Empty, body);
 
     private static string FormatHeaders(IReadOnlyList<HttpHeaderContract> headers)
     {

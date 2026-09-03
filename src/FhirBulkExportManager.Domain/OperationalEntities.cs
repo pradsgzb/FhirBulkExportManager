@@ -154,6 +154,12 @@ public sealed class PluginConfiguration
     public Guid? SiteId { get; private set; }
     public string ConfigurationJson { get; private set; } = "{}";
     public DateTimeOffset UpdatedAtUtc { get; private set; }
+
+    public void Update(string configurationJson, DateTimeOffset updatedAtUtc)
+    {
+        ConfigurationJson = string.IsNullOrWhiteSpace(configurationJson) ? "{}" : configurationJson;
+        UpdatedAtUtc = updatedAtUtc;
+    }
 }
 
 public sealed class SchemaVersion

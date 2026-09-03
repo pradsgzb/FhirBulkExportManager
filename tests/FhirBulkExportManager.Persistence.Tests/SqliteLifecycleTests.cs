@@ -1,6 +1,7 @@
 using FhirBulkExportManager.Application.Abstractions;
 using FhirBulkExportManager.Domain;
 using FhirBulkExportManager.Persistence.Sqlite;
+using FhirBulkExportManager.PluginContracts;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
@@ -240,6 +241,83 @@ public sealed class SqliteLifecycleTests : IDisposable
         Assert.Contains("export jobs reference it", exception.Message, StringComparison.Ordinal);
         Assert.NotNull(await store.GetSiteAsync(configuration.SiteId, CancellationToken.None));
         Assert.NotNull(await store.GetCredentialProfileAsync(configuration.CredentialProfileId, CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task Metadata_history_and_discovered_token_endpoint_are_saved_together()
+    {
+        var factory = await CreateInitializedFactoryAsync();
+        var now = DateTimeOffset.Parse("2026-09-03T03:00:00Z");
+        var configuration = await SeedConfigurationAsync(factory, now);
+        var store = new SqliteConfigurationStore(factory);
+        var credential = await store.GetCredentialProfileAsync(configuration.CredentialProfileId, CancellationToken.None);
+        Assert.NotNull(credential);
+        const string tokenEndpoint = "https://discovered.example/oauth/token";
+        const string capabilityStatement = "{\"resourceType\":\"CapabilityStatement\"}";
+        credential.Update(
+            credential.Name,
+            credential.AuthenticationType,
+            credential.ClientId,
+            credential.SecretReference,
+            tokenEndpoint,
+            now.AddMinutes(1),
+            credential.Scope,
+            credential.Audience,
+            credential.AssertionEndpoint,
+            credential.AdditionalConfigurationJson);
+        var exchange = new HttpExchangeContract(
+            "FHIR capability statement",
+            now,
+            now.AddMilliseconds(50),
+            "GET",
+            "https://fhir.example/metadata",
+            [new HttpHeaderContract("Accept", ["application/fhir+json"])],
+            null,
+            200,
+            "OK",
+            [new HttpHeaderContract("Content-Type", ["application/fhir+json"])],
+            capabilityStatement);
+        var attempt = new ConnectionMetadataAttempt(now, true, 200, "Metadata succeeded.", [exchange]);
+
+        await store.RecordConnectionMetadataAsync(
+            "test",
+            configuration.SiteId,
+            credential,
+            attempt,
+            capabilityStatement,
+            tokenEndpoint,
+            Audit(now, "ConnectionMetadataRecorded", configuration.SiteId),
+            CancellationToken.None);
+        var failedExchange = exchange with
+        {
+            StartedAtUtc = now.AddMinutes(2),
+            CompletedAtUtc = now.AddMinutes(2).AddMilliseconds(30),
+            ResponseStatusCode = 400,
+            ResponseReasonPhrase = "Bad Request",
+            ResponseBody = "{\"resourceType\":\"OperationOutcome\"}",
+        };
+        await store.RecordConnectionMetadataAsync(
+            "test",
+            configuration.SiteId,
+            credential,
+            new ConnectionMetadataAttempt(now.AddMinutes(2), false, 400, "Metadata failed.", [failedExchange]),
+            capabilityStatementJson: null,
+            discoveredTokenEndpoint: null,
+            auditEvent: Audit(now.AddMinutes(2), "ConnectionMetadataRecorded", configuration.SiteId),
+            cancellationToken: CancellationToken.None);
+
+        var history = await store.GetConnectionMetadataAsync("test", configuration.SiteId, CancellationToken.None);
+        Assert.NotNull(history);
+        Assert.Equal(capabilityStatement, history.LatestCapabilityStatementJson);
+        Assert.Equal(tokenEndpoint, history.DiscoveredTokenEndpoint);
+        Assert.Equal(2, history.Attempts.Count);
+        var savedAttempt = history.Attempts[0];
+        Assert.Equal(200, savedAttempt.StatusCode);
+        var savedExchange = Assert.Single(savedAttempt.HttpExchanges);
+        Assert.Equal(capabilityStatement, savedExchange.ResponseBody);
+        Assert.False(history.Attempts[1].Succeeded);
+        Assert.Equal(400, history.Attempts[1].StatusCode);
+        Assert.Equal(tokenEndpoint, (await store.GetCredentialProfileAsync(credential.Id, CancellationToken.None))!.TokenEndpoint);
     }
 
     public void Dispose()

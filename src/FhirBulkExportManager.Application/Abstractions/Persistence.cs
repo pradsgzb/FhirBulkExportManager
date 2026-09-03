@@ -1,4 +1,5 @@
 using FhirBulkExportManager.Domain;
+using FhirBulkExportManager.PluginContracts;
 
 namespace FhirBulkExportManager.Application.Abstractions;
 
@@ -15,6 +16,21 @@ public sealed record JobQuery(
 public sealed record PagedResult<T>(IReadOnlyList<T> Items, int TotalCount);
 
 public sealed record ConnectionDeleteResult(bool CredentialDeleted);
+
+public sealed record ConnectionMetadataAttempt(
+    DateTimeOffset RetrievedAtUtc,
+    bool Succeeded,
+    int? StatusCode,
+    string Summary,
+    IReadOnlyList<HttpExchangeContract> HttpExchanges);
+
+public sealed record ConnectionMetadataHistory(
+    string PluginId,
+    Guid SiteId,
+    string? LatestCapabilityStatementJson,
+    string? DiscoveredTokenEndpoint,
+    DateTimeOffset? LatestSuccessfulRetrievedAtUtc,
+    IReadOnlyList<ConnectionMetadataAttempt> Attempts);
 
 public interface IExportStore
 {
@@ -62,6 +78,8 @@ public interface IConfigurationStore
     Task AddConnectionAsync(Site site, CredentialProfile credentialProfile, AuditEvent auditEvent, CancellationToken cancellationToken);
     Task UpdateConnectionAsync(Site site, CredentialProfile credentialProfile, AuditEvent auditEvent, CancellationToken cancellationToken);
     Task<ConnectionDeleteResult> DeleteConnectionAsync(Guid siteId, Guid credentialProfileId, AuditEvent auditEvent, CancellationToken cancellationToken);
+    Task<ConnectionMetadataHistory?> GetConnectionMetadataAsync(string pluginId, Guid siteId, CancellationToken cancellationToken);
+    Task RecordConnectionMetadataAsync(string pluginId, Guid siteId, CredentialProfile credentialProfile, ConnectionMetadataAttempt attempt, string? capabilityStatementJson, string? discoveredTokenEndpoint, AuditEvent auditEvent, CancellationToken cancellationToken);
     Task<CredentialProfile?> GetCredentialProfileAsync(Guid id, CancellationToken cancellationToken);
     Task<IReadOnlyList<CredentialProfile>> GetCredentialProfilesAsync(Guid? vendorId, CancellationToken cancellationToken);
     Task AddCredentialProfileAsync(CredentialProfile profile, AuditEvent auditEvent, CancellationToken cancellationToken);

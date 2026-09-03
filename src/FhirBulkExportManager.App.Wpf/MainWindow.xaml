@@ -149,6 +149,11 @@
                                             <TextBlock Text="{Binding SelectedHttpExchange.ResponseStatus}" FontWeight="SemiBold" />
                                             <TextBlock Text="{Binding SelectedHttpExchange.Timing}" Foreground="#667085" />
                                             <TextBlock Text="{Binding SelectedHttpExchange.Failure}" Foreground="{StaticResource DangerBrush}" TextWrapping="Wrap" />
+                                            <WrapPanel Margin="0,5,0,0">
+                                                <Button Content="Copy Request" Command="{Binding CopyHttpRequestCommand}" MinWidth="100" AutomationProperties.Name="Copy complete HTTP request" />
+                                                <Button Content="Copy Response" Command="{Binding CopyHttpResponseCommand}" MinWidth="105" AutomationProperties.Name="Copy complete HTTP response" />
+                                                <Button Content="Copy Request + Response" Command="{Binding CopyHttpExchangeCommand}" MinWidth="165" AutomationProperties.Name="Copy complete HTTP exchange" />
+                                            </WrapPanel>
                                         </StackPanel>
                                         <TabControl Grid.Row="3">
                                             <TabItem Header="Headers">
@@ -283,12 +288,19 @@
                                 </DataGrid.Columns>
                             </DataGrid>
                         </StackPanel>
-                        <WrapPanel Grid.Row="3" Grid.ColumnSpan="2" Margin="0,6,0,14">
-                            <Button Content="Edit Selected" Command="{Binding EditConnectionCommand}" MinWidth="120" />
-                            <Button Content="Delete Selected" Command="{Binding DeleteConnectionCommand}" Foreground="{StaticResource DangerBrush}" MinWidth="120" />
-                            <Button Content="Test Selected (/metadata only)" Command="{Binding TestConnectionCommand}" MinWidth="200" />
-                            <Button Content="New / Clear Form" Command="{Binding NewConnectionCommand}" MinWidth="130" />
-                        </WrapPanel>
+                        <StackPanel Grid.Row="3" Grid.ColumnSpan="2" Margin="0,6,0,14">
+                            <WrapPanel>
+                                <Button Content="Edit Selected" Command="{Binding EditConnectionCommand}" MinWidth="120" />
+                                <Button Content="Delete Selected" Command="{Binding DeleteConnectionCommand}" Foreground="{StaticResource DangerBrush}" MinWidth="120" />
+                                <Button Content="Test Selected (/metadata only)" Command="{Binding TestConnectionCommand}" MinWidth="200" />
+                                <Button Content="New / Clear Form" Command="{Binding NewConnectionCommand}" MinWidth="130" />
+                            </WrapPanel>
+                            <TextBlock Text="{Binding ConnectionMetadataStatus}" TextWrapping="Wrap" Foreground="#475467" Margin="4,6,0,2" />
+                            <WrapPanel>
+                                <Button Content="Copy Saved Metadata JSON" Command="{Binding CopyConnectionMetadataCommand}" MinWidth="180" AutomationProperties.Name="Copy saved CapabilityStatement JSON" />
+                                <Button Content="Copy Metadata HTTP History" Command="{Binding CopyConnectionMetadataHttpCommand}" MinWidth="190" AutomationProperties.Name="Copy metadata HTTP history" />
+                            </WrapPanel>
+                        </StackPanel>
                         <StackPanel Grid.Row="4" Grid.ColumnSpan="2" Margin="0,0,0,8">
                             <Separator />
                             <TextBlock Text="{Binding ConnectionEditorTitle}" FontSize="17" FontWeight="SemiBold" Margin="0,12,0,5" />
@@ -303,7 +315,7 @@
                             <TextBlock Text="When editing, leave blank to retain the protected secret." Foreground="#667085" FontSize="11" Margin="4,0,0,2" />
                             <CheckBox Content="Remove the currently stored client secret when saving" IsChecked="{Binding ConnectionRemoveStoredSecret}" Margin="4,2,0,5" />
                         </StackPanel>
-                        <TextBlock Grid.Row="10" Text="OAuth token endpoint (authenticated vendors)" TextWrapping="Wrap" VerticalAlignment="Center" /><TextBox Grid.Row="10" Grid.Column="1" Text="{Binding ConnectionTokenEndpoint}" />
+                        <TextBlock Grid.Row="10" Text="OAuth token endpoint (from /metadata; editable fallback)" TextWrapping="Wrap" VerticalAlignment="Center" /><TextBox Grid.Row="10" Grid.Column="1" Text="{Binding ConnectionTokenEndpoint}" />
                         <TextBlock Grid.Row="11" Text="HealthWizz assertion endpoint" VerticalAlignment="Center" /><TextBox Grid.Row="11" Grid.Column="1" Text="{Binding ConnectionAssertionEndpoint}" />
                         <TextBlock Grid.Row="12" Text="Scope" VerticalAlignment="Center" /><TextBox Grid.Row="12" Grid.Column="1" Text="{Binding ConnectionScope}" />
                         <TextBlock Grid.Row="13" Text="Assertion audience (defaults to token endpoint)" TextWrapping="Wrap" VerticalAlignment="Center" /><TextBox Grid.Row="13" Grid.Column="1" Text="{Binding ConnectionAudience}" />

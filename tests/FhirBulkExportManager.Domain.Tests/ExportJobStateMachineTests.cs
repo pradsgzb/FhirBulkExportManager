@@ -78,6 +78,27 @@ public sealed class ExportJobStateMachineTests
     }
 
     [Fact]
+    public void Failed_permanent_is_operator_recoverable_for_a_confirmed_remote_job()
+    {
+        var job = CreateJob();
+        Transition(job, ExportJobState.Queued);
+        Transition(job, ExportJobState.Authenticating);
+        Transition(job, ExportJobState.Starting);
+        job.ConfirmRemoteJob("https://vendor.example/status?job=opaque", Now, Now);
+        Transition(job, ExportJobState.WaitingForPoll);
+        Transition(job, ExportJobState.Running);
+        Transition(job, ExportJobState.FailedPermanent);
+
+        Assert.False(job.IsTerminal);
+
+        job.ClearFailure();
+        Transition(job, ExportJobState.Running);
+
+        Assert.Equal(ExportJobState.Running, job.State);
+        Assert.True(job.HasConfirmedRemoteJob);
+    }
+
+    [Fact]
     public void Local_pause_is_not_remote_cancellation()
     {
         var job = CreateJob();

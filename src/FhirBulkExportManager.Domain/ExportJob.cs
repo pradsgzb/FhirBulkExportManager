@@ -27,7 +27,7 @@ public sealed class ExportJob
             [ExportJobState.Unknown] = [ExportJobState.Running, ExportJobState.WaitingForPoll, ExportJobState.ManifestReady, ExportJobState.CancelRequested, ExportJobState.FailedPermanent, ExportJobState.Expired],
             [ExportJobState.Expired] = [ExportJobState.Archived],
             [ExportJobState.Cancelled] = [ExportJobState.Archived],
-            [ExportJobState.FailedPermanent] = [ExportJobState.Archived],
+            [ExportJobState.FailedPermanent] = [ExportJobState.Running, ExportJobState.Archived],
             [ExportJobState.Completed] = [ExportJobState.Archived],
             [ExportJobState.Archived] = [],
         };
@@ -141,7 +141,7 @@ public sealed class ExportJob
     public long Version { get; private set; }
 
     public bool HasConfirmedRemoteJob => !string.IsNullOrWhiteSpace(RemoteStatusUrl);
-    public bool IsTerminal => State is ExportJobState.Completed or ExportJobState.Cancelled or ExportJobState.Expired or ExportJobState.FailedPermanent or ExportJobState.Archived;
+    public bool IsTerminal => State is ExportJobState.Completed or ExportJobState.Cancelled or ExportJobState.Expired or ExportJobState.Archived;
 
     public ExportJobEvent Transition(
         ExportJobState target,

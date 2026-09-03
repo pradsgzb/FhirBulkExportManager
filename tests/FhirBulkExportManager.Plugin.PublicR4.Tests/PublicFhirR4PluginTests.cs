@@ -32,6 +32,7 @@ public sealed class PublicFhirR4PluginTests
         Assert.True(result.Succeeded);
         Assert.NotNull(result.SanitizedCapabilityStatementJson);
         Assert.Equal(capabilityStatement.Length, result.SanitizedCapabilityStatementJson.Length);
+        Assert.Null(result.DiscoveredTokenEndpoint);
     }
 
     [Fact]
