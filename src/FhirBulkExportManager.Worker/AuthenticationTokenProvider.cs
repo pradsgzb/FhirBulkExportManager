@@ -13,9 +13,15 @@ public sealed class AuthenticationTokenProvider(
     private readonly ConcurrentDictionary<Guid, AccessToken> cache = new();
     private readonly ConcurrentDictionary<Guid, SemaphoreSlim> locks = new();
 
-    public async Task<AccessToken> GetAsync(ExportJob job, IVendorPlugin plugin, CancellationToken cancellationToken)
+    public async Task<AccessToken> GetAsync(
+        ExportJob job,
+        IVendorPlugin plugin,
+        CancellationToken cancellationToken,
+        bool forceRefresh = false)
     {
-        if (cache.TryGetValue(job.CredentialProfileId, out var existing) && !existing.NeedsRefresh(timeProvider.GetUtcNow(), TimeSpan.FromMinutes(1)))
+        if (!forceRefresh &&
+            cache.TryGetValue(job.CredentialProfileId, out var existing) &&
+            !existing.NeedsRefresh(timeProvider.GetUtcNow(), TimeSpan.FromMinutes(1)))
         {
             return existing with { HttpExchanges = null };
         }
@@ -24,7 +30,12 @@ public sealed class AuthenticationTokenProvider(
         await gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (cache.TryGetValue(job.CredentialProfileId, out existing) && !existing.NeedsRefresh(timeProvider.GetUtcNow(), TimeSpan.FromMinutes(1)))
+            if (forceRefresh)
+            {
+                cache.TryRemove(job.CredentialProfileId, out _);
+            }
+            else if (cache.TryGetValue(job.CredentialProfileId, out existing) &&
+                !existing.NeedsRefresh(timeProvider.GetUtcNow(), TimeSpan.FromMinutes(1)))
             {
                 return existing with { HttpExchanges = null };
             }
@@ -47,6 +58,7 @@ public sealed class AuthenticationTokenProvider(
                 profile.AdditionalConfigurationJson,
                 new SecretMaterial(clientSecret, new Dictionary<string, string>(StringComparer.Ordinal)));
             var token = await plugin.AuthenticateAsync(context, timeProvider, cancellationToken).ConfigureAwait(false);
+            ValidateToken(profile, token);
             cache[job.CredentialProfileId] = token with { HttpExchanges = null };
             return token;
         }
@@ -57,4 +69,28 @@ public sealed class AuthenticationTokenProvider(
     }
 
     public void Invalidate(Guid credentialProfileId) => cache.TryRemove(credentialProfileId, out _);
+
+    private void ValidateToken(CredentialProfile profile, AccessToken token)
+    {
+        var anonymous = string.Equals(profile.AuthenticationType, "None", StringComparison.OrdinalIgnoreCase);
+        if (!anonymous && string.IsNullOrWhiteSpace(token.Value))
+        {
+            throw InvalidToken(
+                "The authenticated vendor returned an empty access token; the protected FHIR request was not sent.",
+                token);
+        }
+
+        if (string.IsNullOrWhiteSpace(token.TokenType))
+        {
+            throw InvalidToken("The authentication response did not provide a token type.", token);
+        }
+
+        if (!anonymous && token.ExpiresAtUtc <= timeProvider.GetUtcNow())
+        {
+            throw InvalidToken("The authentication response contained an access token that was already expired.", token);
+        }
+    }
+
+    private static RecordedHttpExchangeException InvalidToken(string message, AccessToken token) =>
+        new(message, null, token.HttpExchanges ?? []);
 }

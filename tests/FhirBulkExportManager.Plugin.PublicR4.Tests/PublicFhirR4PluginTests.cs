@@ -117,6 +117,32 @@ public sealed class PublicFhirR4PluginTests
         Assert.Equal(100L, download.Headers.Range.Ranges.Single().From.GetValueOrDefault());
     }
 
+    [Fact]
+    public async Task Unauthorized_poll_is_permanent_for_anonymous_connection()
+    {
+        var handler = new StubHandler(request =>
+        {
+            Assert.Null(request.Headers.Authorization);
+            return new HttpResponseMessage(HttpStatusCode.Unauthorized)
+            {
+                Content = new StringContent("{\"resourceType\":\"OperationOutcome\"}"),
+            };
+        });
+        var plugin = CreatePlugin(handler);
+
+        var result = await plugin.PollAsync(
+            new Uri("https://fhir.example.test/status?job=opaque"),
+            CreateSite("https://fhir.example.test"),
+            new AccessToken(string.Empty, DateTimeOffset.MaxValue),
+            TimeProvider.System,
+            CancellationToken.None);
+
+        Assert.Equal(PollDisposition.AuthorizationDenied, result.Disposition);
+        Assert.Equal("AnonymousConnectionCannotAuthenticate", result.ErrorCode);
+        Assert.Contains("authenticated vendor connection", result.SafeErrorMessage!, StringComparison.OrdinalIgnoreCase);
+        Assert.Single(result.HttpExchanges!);
+    }
+
     private static PublicFhirR4Plugin CreatePlugin(HttpMessageHandler handler) =>
         new(new StaticHttpClientFactory(new HttpClient(handler)));
 

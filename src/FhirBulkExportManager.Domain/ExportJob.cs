@@ -297,6 +297,62 @@ public sealed class ExportJob
         Version++;
     }
 
+    public void ReassignImportedConnection(
+        Guid vendorId,
+        Guid siteId,
+        Guid credentialProfileId,
+        string pluginId,
+        string pluginVersion,
+        DateTimeOffset now)
+    {
+        if (!HasConfirmedRemoteJob || RemoteRequestUrl is not null)
+        {
+            throw new InvalidOperationException("Only an externally started export with a confirmed Content-Location can change connections.");
+        }
+
+        if (ManifestJson is not null)
+        {
+            throw new InvalidOperationException("The connection cannot be changed after a manifest has been received.");
+        }
+
+        if (State is not (ExportJobState.Running or
+            ExportJobState.WaitingForPoll or
+            ExportJobState.RetryPending or
+            ExportJobState.FailedTransient or
+            ExportJobState.FailedPermanent or
+            ExportJobState.Paused or
+            ExportJobState.Unknown))
+        {
+            throw new InvalidOperationException($"The imported export connection cannot be changed while the job is {State}.");
+        }
+
+        if (vendorId == Guid.Empty)
+        {
+            throw new ArgumentException("Vendor identifier is required.", nameof(vendorId));
+        }
+
+        if (siteId == Guid.Empty)
+        {
+            throw new ArgumentException("Site identifier is required.", nameof(siteId));
+        }
+
+        if (credentialProfileId == Guid.Empty)
+        {
+            throw new ArgumentException("Credential profile identifier is required.", nameof(credentialProfileId));
+        }
+
+        VendorId = vendorId;
+        SiteId = siteId;
+        CredentialProfileId = credentialProfileId;
+        PluginId = Guard.NotNullOrWhiteSpace(pluginId, nameof(pluginId));
+        PluginVersion = Guard.NotNullOrWhiteSpace(pluginVersion, nameof(pluginVersion));
+        LastErrorCode = null;
+        LastErrorMessage = null;
+        RetryCount = 0;
+        NextPollAtUtc = now;
+        Version++;
+    }
+
     public bool TryAcquireLease(string owner, DateTimeOffset now, TimeSpan duration)
     {
         if (LeaseExpiresAtUtc is { } expiry && expiry > now && !string.Equals(LeaseOwner, owner, StringComparison.Ordinal))

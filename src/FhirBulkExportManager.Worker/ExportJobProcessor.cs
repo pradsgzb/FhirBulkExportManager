@@ -212,7 +212,15 @@ public sealed class ExportJobProcessor(
         AccessToken token;
         try
         {
-            token = await tokenProvider.GetAsync(job, plugin, cancellationToken).ConfigureAwait(false);
+            // An imported export has a confirmed Content-Location but no locally journaled
+            // kickoff request. Its first poll must establish its own fresh authentication
+            // context instead of inheriting a token cached by an unrelated running job.
+            var firstImportedPoll = job.RemoteRequestUrl is null && job.LastPolledAtUtc is null;
+            token = await tokenProvider.GetAsync(
+                job,
+                plugin,
+                cancellationToken,
+                forceRefresh: firstImportedPoll).ConfigureAwait(false);
         }
         catch (RecordedHttpExchangeException exception)
         {
@@ -243,6 +251,61 @@ public sealed class ExportJobProcessor(
 
         using var gateLease = gate.Lease!;
         var result = await plugin.PollAsync(exactStatus, site, token, timeProvider, cancellationToken).ConfigureAwait(false);
+        var httpExchanges = CombineHttpExchanges(token.HttpExchanges, result.HttpExchanges);
+
+        // A server can revoke a token before its advertised expiry. When a cached bearer
+        // token is rejected, refresh it and retry this idempotent GET exactly once. Both
+        // the rejected request and the complete refresh/retry sequence remain in history.
+        if (result.Disposition == PollDisposition.AuthenticationRequired &&
+            token.HttpExchanges is not { Count: > 0 } &&
+            !string.IsNullOrWhiteSpace(token.Value))
+        {
+            tokenProvider.Invalidate(job.CredentialProfileId);
+            try
+            {
+                var refreshedToken = await tokenProvider.GetAsync(
+                    job,
+                    plugin,
+                    cancellationToken,
+                    forceRefresh: true).ConfigureAwait(false);
+                var refreshedResult = await plugin.PollAsync(
+                    exactStatus,
+                    site,
+                    refreshedToken,
+                    timeProvider,
+                    cancellationToken).ConfigureAwait(false);
+                httpExchanges = CombineHttpExchanges(
+                    httpExchanges,
+                    CombineHttpExchanges(refreshedToken.HttpExchanges, refreshedResult.HttpExchanges));
+                result = refreshedResult;
+            }
+            catch (RecordedHttpExchangeException exception)
+            {
+                httpExchanges = CombineHttpExchanges(httpExchanges, exception.HttpExchanges);
+                var transient = IsTransientAuthenticationFailure(exception.StatusCode);
+                await FailOrRetryAsync(
+                    job,
+                    transient,
+                    "AuthenticationRefreshFailed",
+                    exception.Message,
+                    cancellationToken,
+                    httpExchanges: httpExchanges).ConfigureAwait(false);
+                return;
+            }
+            catch (HttpRequestException exception)
+            {
+                var transient = IsTransientAuthenticationFailure(exception.StatusCode);
+                await FailOrRetryAsync(
+                    job,
+                    transient,
+                    "AuthenticationRefreshFailed",
+                    exception.Message,
+                    cancellationToken,
+                    httpExchanges: httpExchanges).ConfigureAwait(false);
+                return;
+            }
+        }
+
         if (result.Disposition == PollDisposition.RetryLater)
         {
             siteResilienceGate.ReportTransientFailure(job.SiteId, result.RetryAtUtc);
@@ -254,7 +317,6 @@ public sealed class ExportJobProcessor(
         var expected = job.Version;
         var operation = Guid.NewGuid();
         var correlation = operation.ToString("N");
-        var httpExchanges = CombineHttpExchanges(token.HttpExchanges, result.HttpExchanges);
         if (result.Disposition is not (PollDisposition.Running or PollDisposition.Complete))
         {
             job.RecordRemoteProgress(result.Progress);
@@ -642,6 +704,10 @@ public sealed class ExportJobProcessor(
         IReadOnlyList<HttpExchangeContract>? first,
         IReadOnlyList<HttpExchangeContract>? second) =>
         (first ?? []).Concat(second ?? []).ToArray();
+
+    private static bool IsTransientAuthenticationFailure(HttpStatusCode? statusCode) =>
+        statusCode is null or HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests ||
+        (int?)statusCode >= 500;
 
     private async Task RecordUnexpectedFailureAsync(Guid jobId, Exception exception, CancellationToken cancellationToken)
     {

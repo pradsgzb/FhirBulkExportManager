@@ -121,6 +121,21 @@ public sealed class MainViewModel : ObservableObject
         SearchCommand = new AsyncRelayCommand(() => RunAsync(() => RefreshJobsAsync()));
         CreateJobCommand = new AsyncRelayCommand(() => RunAsync(CreateJobAsync));
         ImportExistingCommand = new AsyncRelayCommand(() => RunAsync(ImportExistingExportAsync));
+        RepairImportedConnectionCommand = new AsyncRelayCommand(
+            () => RunAsync(RepairImportedConnectionAsync),
+            () => SelectedJob is
+            {
+                HasConfirmedRemoteJob: true,
+                RemoteRequestUrl: null,
+                ManifestJson: null,
+                State: ExportJobState.Running or
+                    ExportJobState.WaitingForPoll or
+                    ExportJobState.RetryPending or
+                    ExportJobState.FailedTransient or
+                    ExportJobState.FailedPermanent or
+                    ExportJobState.Paused or
+                    ExportJobState.Unknown,
+            });
         StartCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.StartAsync(job.Id, CancellationToken.None))), () => SelectedJob?.State == ExportJobState.Draft);
         StatusNowCommand = new AsyncRelayCommand(
             () => RunAsync(() => RunSelectedAsync(job => jobService.GetStatusNowAsync(job.Id, CancellationToken.None))),
@@ -161,6 +176,7 @@ public sealed class MainViewModel : ObservableObject
     public ICommand SearchCommand { get; }
     public ICommand CreateJobCommand { get; }
     public ICommand ImportExistingCommand { get; }
+    public ICommand RepairImportedConnectionCommand { get; }
     public ICommand StartCommand { get; }
     public ICommand StatusNowCommand { get; }
     public ICommand PauseCommand { get; }
@@ -565,6 +581,39 @@ public sealed class MainViewModel : ObservableObject
         await RefreshJobsAsync().ConfigureAwait(true);
         SelectedJob = Jobs.FirstOrDefault(x => x.Id == id);
         StatusMessage = $"Existing export {id:D} imported. Monitoring was queued without sending $export.";
+    }
+
+    private async Task RepairImportedConnectionAsync()
+    {
+        var job = SelectedJob ?? throw new InvalidOperationException("Select the imported job to repair on the Dashboard & Jobs tab first.");
+        var vendor = SelectedImportVendor ?? throw new InvalidOperationException("Select the vendor that was used to start the export.");
+        var site = SelectedImportSite ?? throw new InvalidOperationException("Select the site connection that was used to start the export.");
+        var credential = SelectedImportCredential ?? throw new InvalidOperationException("The selected site connection has no credential profile.");
+        if (site.VendorId != vendor.Id || site.CredentialProfileId != credential.Id)
+        {
+            throw new InvalidOperationException("The selected vendor, site, and credential do not describe one saved connection.");
+        }
+
+        if (!dialogs.Confirm(
+            "Repair imported job connection",
+            $"Reassign the existing imported job to this connection?\n\nJob: {job.Name}\nConnection: {site.Name}\nVendor: {vendor.Name}\n\nThe exact Content-Location and all existing history will be retained. No new $export request will be sent."))
+        {
+            return;
+        }
+
+        var jobId = job.Id;
+        var previousCredentialProfileId = job.CredentialProfileId;
+        var result = await jobService.ReassignImportedConnectionAsync(
+            jobId,
+            vendor.Id,
+            site.Id,
+            credential.Id,
+            CancellationToken.None).ConfigureAwait(true);
+        tokenProvider.Invalidate(previousCredentialProfileId);
+        tokenProvider.Invalidate(credential.Id);
+        StatusMessage = result.Message;
+        await RefreshJobsAsync().ConfigureAwait(true);
+        SelectedJob = Jobs.FirstOrDefault(x => x.Id == jobId);
     }
 
     private async Task RunSelectedAsync(Func<ExportJob, Task<JobActionResult>> operation)

@@ -173,7 +173,16 @@ public sealed class PublicFhirR4Plugin(IHttpClientFactory httpClientFactory) : I
                 case HttpStatusCode.OK:
                     return new PollResult(PollDisposition.Complete, response.StatusCode, null, progress, responseBody, null, null, null, exchanges);
                 case HttpStatusCode.Unauthorized:
-                    return new PollResult(PollDisposition.AuthenticationRequired, response.StatusCode, now, progress, null, responseBody, "Unauthorized", "The public server unexpectedly requested authentication.", exchanges);
+                    return new PollResult(
+                        PollDisposition.AuthorizationDenied,
+                        response.StatusCode,
+                        null,
+                        progress,
+                        null,
+                        responseBody,
+                        "AnonymousConnectionCannotAuthenticate",
+                        "This job uses an anonymous Public/Open FHIR R4 connection, but the status endpoint requires authentication. Repair or re-import the job using the authenticated vendor connection that started the export.",
+                        exchanges);
                 case HttpStatusCode.Forbidden:
                     return new PollResult(PollDisposition.AuthorizationDenied, response.StatusCode, null, progress, null, responseBody, "Forbidden", "The public server denied this operation.", exchanges);
                 case HttpStatusCode.Gone:

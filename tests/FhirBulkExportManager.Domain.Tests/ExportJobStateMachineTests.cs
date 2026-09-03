@@ -68,6 +68,57 @@ public sealed class ExportJobStateMachineTests
     }
 
     [Fact]
+    public void Imported_export_connection_can_be_reassigned_without_changing_content_location()
+    {
+        var job = CreateJob();
+        const string exact = "https://fhir.example.test/status?job_id=opaque";
+        job.ConfirmRemoteJob(exact, Now, Now);
+        Transition(job, ExportJobState.WaitingForPoll);
+        Transition(job, ExportJobState.Running);
+        job.ScheduleRetry(Now, "Unauthorized", "Old connection was rejected.");
+        Transition(job, ExportJobState.RetryPending);
+        var newVendorId = Guid.NewGuid();
+        var newSiteId = Guid.NewGuid();
+        var newCredentialId = Guid.NewGuid();
+
+        job.ReassignImportedConnection(
+            newVendorId,
+            newSiteId,
+            newCredentialId,
+            "eclinicalworks",
+            "1.0.0",
+            Now.AddMinutes(1));
+
+        Assert.Equal(newVendorId, job.VendorId);
+        Assert.Equal(newSiteId, job.SiteId);
+        Assert.Equal(newCredentialId, job.CredentialProfileId);
+        Assert.Equal("eclinicalworks", job.PluginId);
+        Assert.Equal(exact, job.RemoteStatusUrl);
+        Assert.Null(job.RemoteRequestUrl);
+        Assert.Null(job.LastErrorCode);
+        Assert.Equal(0, job.RetryCount);
+        Assert.Equal(Now.AddMinutes(1), job.NextPollAtUtc);
+    }
+
+    [Fact]
+    public void Locally_started_export_connection_cannot_be_reassigned()
+    {
+        var job = CreateJob();
+        job.RecordKickoffRequest("https://fhir.example.test/Group/group-1/$export");
+        job.ConfirmRemoteJob("https://fhir.example.test/status?job_id=opaque", Now, Now);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => job.ReassignImportedConnection(
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            Guid.NewGuid(),
+            "eclinicalworks",
+            "1.0.0",
+            Now));
+
+        Assert.Contains("externally started export", exception.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void Waiting_for_poll_without_content_location_is_rejected()
     {
         var job = CreateJob();

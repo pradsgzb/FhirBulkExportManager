@@ -73,6 +73,11 @@ public sealed class ExportJobService(
             throw new InvalidOperationException("Vendor, site, and credential profile must be enabled and belong to the same vendor.");
         }
 
+        if (site.CredentialProfileId != credential.Id)
+        {
+            throw new InvalidOperationException("The imported export must use the credential profile assigned to the selected connection.");
+        }
+
         _ = pluginCatalog.GetRequired(vendor.PluginId, vendor.PluginVersion);
         var exactContentLocation = Guard.NotNullOrWhiteSpace(command.ExactContentLocation, nameof(command.ExactContentLocation));
         if (exactContentLocation.Length > 4096)
@@ -93,6 +98,10 @@ public sealed class ExportJobService(
         {
             throw new ArgumentException("Content-Location must not contain a URI fragment.", nameof(command.ExactContentLocation));
         }
+
+        EnsureSameOrigin(
+            contentLocation,
+            Guard.AbsoluteHttpsUri(site.FhirBaseUrl, nameof(site.FhirBaseUrl), allowLoopbackHttp: true));
 
         var existing = await exportStore.GetJobByRemoteStatusUrlAsync(exactContentLocation, cancellationToken).ConfigureAwait(false);
         if (existing is not null)
@@ -156,6 +165,111 @@ public sealed class ExportJobService(
         await exportStore.AddJobAsync(job, importedEvent, audit, cancellationToken).ConfigureAwait(false);
         workSignal.Signal();
         return job.Id;
+    }
+
+    public async Task<JobActionResult> ReassignImportedConnectionAsync(
+        Guid jobId,
+        Guid vendorId,
+        Guid siteId,
+        Guid credentialProfileId,
+        CancellationToken cancellationToken)
+    {
+        var job = await RequiredJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+        var vendor = await configurationStore.GetVendorAsync(vendorId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Selected vendor does not exist.");
+        var site = await configurationStore.GetSiteAsync(siteId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Selected site does not exist.");
+        var credential = await configurationStore.GetCredentialProfileAsync(credentialProfileId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Selected credential profile does not exist.");
+
+        if (!vendor.Enabled || !site.Enabled || site.VendorId != vendor.Id || credential.VendorId != vendor.Id)
+        {
+            throw new InvalidOperationException("Vendor, site, and credential profile must be enabled and belong to the same vendor.");
+        }
+
+        if (site.CredentialProfileId != credential.Id)
+        {
+            throw new InvalidOperationException("The imported export must use the credential profile assigned to the selected connection.");
+        }
+
+        _ = pluginCatalog.GetRequired(vendor.PluginId, vendor.PluginVersion);
+        var exactContentLocation = Guard.AbsoluteHttpsUri(
+            job.RemoteStatusUrl ?? throw new InvalidOperationException("The imported export has no Content-Location."),
+            nameof(job.RemoteStatusUrl),
+            allowLoopbackHttp: true);
+        EnsureSameOrigin(
+            exactContentLocation,
+            Guard.AbsoluteHttpsUri(site.FhirBaseUrl, nameof(site.FhirBaseUrl), allowLoopbackHttp: true));
+
+        var expected = job.Version;
+        var previousState = job.State;
+        var previousPluginId = job.PluginId;
+        var previousSiteId = job.SiteId;
+        var previousCredentialProfileId = job.CredentialProfileId;
+        var now = timeProvider.GetUtcNow();
+        job.ReassignImportedConnection(
+            vendor.Id,
+            site.Id,
+            credential.Id,
+            vendor.PluginId,
+            vendor.PluginVersion,
+            now);
+
+        var operationId = Guid.NewGuid();
+        var correlationId = operationId.ToString("N");
+        var message = "Imported export was reassigned to the selected connection; no remote kickoff request was sent.";
+        var metadata = JsonSerializer.Serialize(
+            new
+            {
+                progress = (string?)null,
+                httpExchanges = Array.Empty<object>(),
+                connectionChange = new
+                {
+                    previousPluginId,
+                    previousSiteId,
+                    previousCredentialProfileId,
+                    newPluginId = vendor.PluginId,
+                    newSiteId = site.Id,
+                    newCredentialProfileId = credential.Id,
+                },
+            },
+            JsonDefaults.Options);
+        ExportJobEvent evt;
+        if (job.State == ExportJobState.Running)
+        {
+            evt = new ExportJobEvent(
+                job.Id,
+                previousState,
+                job.State,
+                "ImportedConnectionReassigned",
+                now,
+                message,
+                operationId,
+                correlationId,
+                metadata);
+        }
+        else
+        {
+            var target = job.State switch
+            {
+                ExportJobState.Paused => ExportJobState.WaitingForPoll,
+                ExportJobState.FailedTransient => ExportJobState.RetryPending,
+                _ => ExportJobState.Running,
+            };
+            evt = job.Transition(
+                target,
+                now,
+                "ImportedConnectionReassigned",
+                message,
+                operationId,
+                correlationId,
+                metadata);
+        }
+
+        var audit = Audit(now, "ImportedConnectionReassigned", job.Id, "Succeeded", correlationId);
+        await exportStore.UpdateJobAsync(job, evt, audit, expected, cancellationToken).ConfigureAwait(false);
+        workSignal.Signal();
+        return new JobActionResult(job.Id, job.State, "Imported job connection repaired and an authenticated status check was queued.");
     }
 
     public Task<JobActionResult> StartAsync(Guid jobId, CancellationToken cancellationToken) =>
@@ -353,6 +467,17 @@ public sealed class ExportJobService(
         if (!string.Equals(actual?.Trim(), expected, StringComparison.Ordinal))
         {
             throw new InvalidOperationException($"Type {expected} exactly to confirm this operation.");
+        }
+    }
+
+    private static void EnsureSameOrigin(Uri contentLocation, Uri siteBaseUri)
+    {
+        if (!string.Equals(contentLocation.Scheme, siteBaseUri.Scheme, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(contentLocation.Host, siteBaseUri.Host, StringComparison.OrdinalIgnoreCase) ||
+            contentLocation.Port != siteBaseUri.Port)
+        {
+            throw new InvalidOperationException(
+                $"Content-Location origin '{contentLocation.GetLeftPart(UriPartial.Authority)}' does not match the selected connection origin '{siteBaseUri.GetLeftPart(UriPartial.Authority)}'. Select the connection that was used to start this export.");
         }
     }
 }
