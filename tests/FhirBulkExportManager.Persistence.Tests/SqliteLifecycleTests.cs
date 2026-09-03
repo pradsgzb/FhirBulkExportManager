@@ -144,6 +144,32 @@ public sealed class SqliteLifecycleTests : IDisposable
         Assert.Equal(new[] { "early", "late" }, timeline.Select(x => x.EventType).ToArray());
     }
 
+    [Fact]
+    public async Task Remote_status_url_lookup_finds_an_imported_export_by_its_exact_opaque_value()
+    {
+        var factory = await CreateInitializedFactoryAsync();
+        var now = DateTimeOffset.Parse("2026-09-03T03:00:00Z");
+        var configuration = await SeedConfigurationAsync(factory, now);
+        var job = CreateJob("Imported export", configuration, now);
+        const string exact = "https://vendor.example/status?job_id=A%2FB&opaque=x%20y";
+        job.ConfirmRemoteJob(exact, now, now);
+        _ = job.Transition(ExportJobState.WaitingForPoll, now, "imported", "Imported", Guid.NewGuid(), "imported");
+
+        await using (var context = await factory.CreateDbContextAsync())
+        {
+            context.ExportJobs.Add(job);
+            await context.SaveChangesAsync();
+        }
+
+        var store = new SqliteExportStore(factory);
+        var loaded = await store.GetJobByRemoteStatusUrlAsync(exact, CancellationToken.None);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(job.Id, loaded.Id);
+        Assert.Equal(exact, loaded.RemoteStatusUrl);
+        Assert.Null(await store.GetJobByRemoteStatusUrlAsync(exact + "-different", CancellationToken.None));
+    }
+
     public void Dispose()
     {
         SqliteConnection.ClearAllPools();

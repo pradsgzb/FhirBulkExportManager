@@ -20,6 +20,8 @@ public interface IExportStore
 
     Task<ExportJob?> GetJobAsync(Guid jobId, CancellationToken cancellationToken);
 
+    Task<ExportJob?> GetJobByRemoteStatusUrlAsync(string exactContentLocation, CancellationToken cancellationToken);
+
     Task<PagedResult<ExportJob>> QueryJobsAsync(JobQuery query, CancellationToken cancellationToken);
 
     Task<IReadOnlyList<ExportJob>> GetRunnableJobsAsync(DateTimeOffset now, int take, CancellationToken cancellationToken);

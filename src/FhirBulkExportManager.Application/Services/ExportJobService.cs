@@ -59,6 +59,105 @@ public sealed class ExportJobService(
         return job.Id;
     }
 
+    public async Task<Guid> ImportExistingAsync(ImportExistingExportCommand command, CancellationToken cancellationToken)
+    {
+        var vendor = await configurationStore.GetVendorAsync(command.VendorId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Selected vendor does not exist.");
+        var site = await configurationStore.GetSiteAsync(command.SiteId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Selected site does not exist.");
+        var credential = await configurationStore.GetCredentialProfileAsync(command.CredentialProfileId, cancellationToken).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("Selected credential profile does not exist.");
+
+        if (!vendor.Enabled || !site.Enabled || site.VendorId != vendor.Id || credential.VendorId != vendor.Id)
+        {
+            throw new InvalidOperationException("Vendor, site, and credential profile must be enabled and belong to the same vendor.");
+        }
+
+        _ = pluginCatalog.GetRequired(vendor.PluginId, vendor.PluginVersion);
+        var exactContentLocation = Guard.NotNullOrWhiteSpace(command.ExactContentLocation, nameof(command.ExactContentLocation));
+        if (exactContentLocation.Length > 4096)
+        {
+            throw new ArgumentOutOfRangeException(nameof(command.ExactContentLocation), "Content-Location cannot exceed 4,096 characters.");
+        }
+
+        var contentLocation = Guard.AbsoluteHttpsUri(
+            exactContentLocation,
+            nameof(command.ExactContentLocation),
+            allowLoopbackHttp: true);
+        if (!string.IsNullOrEmpty(contentLocation.UserInfo))
+        {
+            throw new ArgumentException("Content-Location must not contain embedded credentials.", nameof(command.ExactContentLocation));
+        }
+
+        if (!string.IsNullOrEmpty(contentLocation.Fragment))
+        {
+            throw new ArgumentException("Content-Location must not contain a URI fragment.", nameof(command.ExactContentLocation));
+        }
+
+        var existing = await exportStore.GetJobByRemoteStatusUrlAsync(exactContentLocation, cancellationToken).ConfigureAwait(false);
+        if (existing is not null)
+        {
+            throw new InvalidOperationException($"This Content-Location is already assigned to job {existing.Id:D} ({existing.State}).");
+        }
+
+        var now = timeProvider.GetUtcNow();
+        if (command.RemoteStartedAtUtc > now.AddMinutes(5))
+        {
+            throw new InvalidOperationException("Remote export start time cannot be in the future.");
+        }
+
+        var job = new ExportJob(
+            Guid.NewGuid(),
+            command.Name,
+            vendor.Id,
+            site.Id,
+            credential.Id,
+            vendor.PluginId,
+            vendor.PluginVersion,
+            command.ExportType,
+            command.Priority,
+            command.LocalDestination,
+            now,
+            command.GroupId,
+            command.SinceUtc,
+            JsonSerializer.Serialize(command.ResourceTypes, JsonDefaults.Options),
+            JsonSerializer.Serialize(command.TypeFilters, JsonDefaults.Options),
+            command.VendorOptionsJson,
+            command.OutputFormat,
+            command.Description,
+            command.AutomaticCleanupEnabled);
+
+        job.ConfirmRemoteJob(
+            exactContentLocation,
+            now,
+            nextPollAtUtc: now,
+            remoteStartedAtUtc: command.RemoteStartedAtUtc);
+        var operationId = Guid.NewGuid();
+        var correlationId = operationId.ToString("N");
+        var importedEvent = job.Transition(
+            ExportJobState.WaitingForPoll,
+            now,
+            "ExistingRemoteExportImported",
+            "Existing remote export was imported for monitoring; this application did not send a kickoff request.",
+            operationId,
+            correlationId);
+        var auditMetadata = JsonSerializer.Serialize(
+            new { source = "external", command.RemoteStartedAtUtc },
+            JsonDefaults.Options);
+        var audit = new AuditEvent(
+            now,
+            identityProvider.GetCurrentIdentity(),
+            "ExistingRemoteExportImported",
+            nameof(ExportJob),
+            job.Id.ToString("D"),
+            "Succeeded",
+            correlationId,
+            auditMetadata);
+        await exportStore.AddJobAsync(job, importedEvent, audit, cancellationToken).ConfigureAwait(false);
+        workSignal.Signal();
+        return job.Id;
+    }
+
     public Task<JobActionResult> StartAsync(Guid jobId, CancellationToken cancellationToken) =>
         TransitionAsync(jobId, ExportJobState.Draft, ExportJobState.Queued, "ExportStartRequested", "Export was explicitly queued by the operator.", true, cancellationToken);
 

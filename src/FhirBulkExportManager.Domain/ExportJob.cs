@@ -7,7 +7,7 @@ public sealed class ExportJob
     private static readonly IReadOnlyDictionary<ExportJobState, HashSet<ExportJobState>> LegalTransitions =
         new Dictionary<ExportJobState, HashSet<ExportJobState>>
         {
-            [ExportJobState.Draft] = [ExportJobState.Queued, ExportJobState.Archived],
+            [ExportJobState.Draft] = [ExportJobState.Queued, ExportJobState.WaitingForPoll, ExportJobState.Archived],
             [ExportJobState.Queued] = [ExportJobState.Authenticating, ExportJobState.Paused, ExportJobState.FailedPermanent],
             [ExportJobState.Authenticating] = [ExportJobState.Starting, ExportJobState.RetryPending, ExportJobState.FailedPermanent, ExportJobState.Paused],
             [ExportJobState.Starting] = [ExportJobState.Running, ExportJobState.WaitingForPoll, ExportJobState.Unknown, ExportJobState.RetryPending, ExportJobState.FailedPermanent],
@@ -157,6 +157,11 @@ public sealed class ExportJob
             throw new InvalidOperationException($"Illegal export job transition: {State} -> {target}.");
         }
 
+        if (target == ExportJobState.WaitingForPoll && !HasConfirmedRemoteJob)
+        {
+            throw new InvalidOperationException("Cannot wait for polling before the exact Content-Location is persisted.");
+        }
+
         var previous = State;
         State = target;
         Version++;
@@ -170,7 +175,12 @@ public sealed class ExportJob
         Version++;
     }
 
-    public void ConfirmRemoteJob(string exactContentLocation, DateTimeOffset now, DateTimeOffset? nextPollAtUtc, string? progress = null)
+    public void ConfirmRemoteJob(
+        string exactContentLocation,
+        DateTimeOffset now,
+        DateTimeOffset? nextPollAtUtc,
+        string? progress = null,
+        DateTimeOffset? remoteStartedAtUtc = null)
     {
         if (!Uri.TryCreate(exactContentLocation, UriKind.Absolute, out _))
         {
@@ -178,7 +188,12 @@ public sealed class ExportJob
         }
 
         RemoteStatusUrl = exactContentLocation;
-        StartedAtUtc ??= now;
+        if (remoteStartedAtUtc > now.AddMinutes(5))
+        {
+            throw new ArgumentOutOfRangeException(nameof(remoteStartedAtUtc), "Remote start time cannot be in the future.");
+        }
+
+        StartedAtUtc ??= remoteStartedAtUtc ?? now;
         NextPollAtUtc = nextPollAtUtc;
         if (!string.IsNullOrWhiteSpace(progress))
         {

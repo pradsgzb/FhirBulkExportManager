@@ -225,6 +225,43 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem Header="Import Existing Export">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid Margin="24" MaxWidth="980" HorizontalAlignment="Left">
+                        <Grid.ColumnDefinitions><ColumnDefinition Width="240" /><ColumnDefinition Width="680" /></Grid.ColumnDefinitions>
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" /><RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <TextBlock Grid.ColumnSpan="2" Text="Import an Already-Started Export" FontSize="23" FontWeight="SemiBold" Margin="0,0,0,8" />
+                        <Border Grid.Row="1" Grid.ColumnSpan="2" Background="#EFF8FF" BorderBrush="#84CAFF" BorderThickness="1" CornerRadius="4" Padding="12" Margin="0,0,0,18">
+                            <TextBlock Text="Use this when $export was already started outside this application. Import immediately queues a GET to the exact Content-Location; it never sends another kickoff request. Requests made earlier in Postman cannot be reconstructed, but every request and response made by this application after import is preserved with secrets redacted." Foreground="#175CD3" TextWrapping="Wrap" />
+                        </Border>
+                        <TextBlock Grid.Row="2" Text="Friendly job name *" VerticalAlignment="Center" /><TextBox Grid.Row="2" Grid.Column="1" Text="{Binding ImportJobName}" />
+                        <TextBlock Grid.Row="3" Text="Description / notes" VerticalAlignment="Center" /><TextBox Grid.Row="3" Grid.Column="1" Text="{Binding ImportJobDescription}" AcceptsReturn="True" Height="62" />
+                        <TextBlock Grid.Row="4" Text="Exact Content-Location *" VerticalAlignment="Center" /><TextBox Grid.Row="4" Grid.Column="1" Text="{Binding ImportContentLocation}" Height="62" TextWrapping="Wrap" VerticalContentAlignment="Top" AutomationProperties.Name="Exact Content-Location" />
+                        <TextBlock Grid.Row="5" Text="Remote start time (UTC, optional)" VerticalAlignment="Center" /><TextBox Grid.Row="5" Grid.Column="1" Text="{Binding ImportRemoteStartedUtc}" ToolTip="Example: 2026-09-03T12:30:00Z" />
+                        <TextBlock Grid.Row="6" Text="Vendor *" VerticalAlignment="Center" /><ComboBox Grid.Row="6" Grid.Column="1" ItemsSource="{Binding Vendors}" SelectedItem="{Binding SelectedImportVendor}" DisplayMemberPath="Name" />
+                        <TextBlock Grid.Row="7" Text="Site *" VerticalAlignment="Center" /><ComboBox Grid.Row="7" Grid.Column="1" ItemsSource="{Binding Sites}" SelectedItem="{Binding SelectedImportSite}" DisplayMemberPath="Name" />
+                        <TextBlock Grid.Row="8" Text="Credential profile *" VerticalAlignment="Center" /><ComboBox Grid.Row="8" Grid.Column="1" ItemsSource="{Binding Credentials}" SelectedItem="{Binding SelectedImportCredential}" DisplayMemberPath="Name" />
+                        <TextBlock Grid.Row="9" Text="Export type *" VerticalAlignment="Center" /><ComboBox Grid.Row="9" Grid.Column="1" ItemsSource="{Binding ExportTypes}" SelectedItem="{Binding ImportExportType}" />
+                        <TextBlock Grid.Row="10" Text="Group ID (Group export)" VerticalAlignment="Center" /><TextBox Grid.Row="10" Grid.Column="1" Text="{Binding ImportGroupId}" />
+                        <TextBlock Grid.Row="11" Text="_since (ISO timestamp)" VerticalAlignment="Center" /><TextBox Grid.Row="11" Grid.Column="1" Text="{Binding ImportSinceUtc}" />
+                        <TextBlock Grid.Row="12" Text="_type (comma-separated)" VerticalAlignment="Center" /><TextBox Grid.Row="12" Grid.Column="1" Text="{Binding ImportResourceTypes}" />
+                        <TextBlock Grid.Row="13" Text="_typeFilter (semicolon-separated)" VerticalAlignment="Center" /><TextBox Grid.Row="13" Grid.Column="1" Text="{Binding ImportTypeFilters}" />
+                        <TextBlock Grid.Row="14" Text="Vendor options JSON" VerticalAlignment="Top" Margin="0,8" /><TextBox Grid.Row="14" Grid.Column="1" Text="{Binding ImportVendorOptionsJson}" AcceptsReturn="True" FontFamily="Consolas" Height="72" VerticalScrollBarVisibility="Auto" />
+                        <TextBlock Grid.Row="15" Text="Priority" VerticalAlignment="Center" /><ComboBox Grid.Row="15" Grid.Column="1" ItemsSource="{Binding Priorities}" SelectedItem="{Binding ImportPriority}" />
+                        <StackPanel Grid.Row="16" Grid.Column="1" Margin="3,10">
+                            <CheckBox Content="Automatically clean up remote export only after valid local commit" IsChecked="{Binding ImportAutomaticCleanup}" Margin="0,0,0,10" />
+                            <Button Content="Import and Start Monitoring" Command="{Binding ImportExistingCommand}" HorizontalAlignment="Left" MinWidth="210" Background="{StaticResource PrimaryBrush}" Foreground="White" AutomationProperties.Name="Import existing export and start monitoring" />
+                        </StackPanel>
+                    </Grid>
+                </ScrollViewer>
+            </TabItem>
+
             <TabItem Header="Connections">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
                     <Grid Margin="24" MaxWidth="980" HorizontalAlignment="Left">

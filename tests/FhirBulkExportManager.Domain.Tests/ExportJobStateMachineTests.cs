@@ -51,6 +51,33 @@ public sealed class ExportJobStateMachineTests
     }
 
     [Fact]
+    public void Existing_remote_export_can_be_imported_without_a_kickoff_request()
+    {
+        var job = CreateJob();
+        var remoteStartedAtUtc = Now.AddMinutes(-15);
+        const string exact = "https://vendor.example/status?job_id=A%2FB&opaque=x%20y";
+
+        job.ConfirmRemoteJob(exact, Now, Now, remoteStartedAtUtc: remoteStartedAtUtc);
+        Transition(job, ExportJobState.WaitingForPoll);
+
+        Assert.Equal(ExportJobState.WaitingForPoll, job.State);
+        Assert.Equal(exact, job.RemoteStatusUrl);
+        Assert.Equal(remoteStartedAtUtc, job.StartedAtUtc);
+        Assert.Equal(Now, job.NextPollAtUtc);
+        Assert.Null(job.RemoteRequestUrl);
+    }
+
+    [Fact]
+    public void Waiting_for_poll_without_content_location_is_rejected()
+    {
+        var job = CreateJob();
+
+        var exception = Assert.Throws<InvalidOperationException>(() => Transition(job, ExportJobState.WaitingForPoll));
+
+        Assert.Contains("Content-Location", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Local_pause_is_not_remote_cancellation()
     {
         var job = CreateJob();
@@ -78,4 +105,3 @@ public sealed class ExportJobStateMachineTests
         _ = job.Transition(target, Now, "Test", "Test transition", operation, operation.ToString("N"));
     }
 }
-

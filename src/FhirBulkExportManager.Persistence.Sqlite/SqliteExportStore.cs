@@ -27,6 +27,15 @@ public sealed class SqliteExportStore(IDbContextFactory<ExportDbContext> context
         return await context.ExportJobs.AsNoTracking().SingleOrDefaultAsync(x => x.Id == jobId, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<ExportJob?> GetJobByRemoteStatusUrlAsync(string exactContentLocation, CancellationToken cancellationToken)
+    {
+        await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        return await context.ExportJobs
+            .AsNoTracking()
+            .FirstOrDefaultAsync(x => x.RemoteStatusUrl == exactContentLocation, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
     public async Task<PagedResult<ExportJob>> QueryJobsAsync(JobQuery query, CancellationToken cancellationToken)
     {
         await using var context = await contextFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);

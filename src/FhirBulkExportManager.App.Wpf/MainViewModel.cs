@@ -34,6 +34,9 @@ public sealed class MainViewModel : ObservableObject
     private Vendor? selectedVendor;
     private Site? selectedSite;
     private CredentialProfile? selectedCredential;
+    private Vendor? selectedImportVendor;
+    private Site? selectedImportSite;
+    private CredentialProfile? selectedImportCredential;
     private Vendor? selectedConnectionVendor;
     private Site? selectedConnectionSite;
     private string searchText = string.Empty;
@@ -48,6 +51,18 @@ public sealed class MainViewModel : ObservableObject
     private string newVendorOptionsJson = "{}";
     private JobPriority newPriority = JobPriority.Normal;
     private bool newAutomaticCleanup;
+    private string importJobName = string.Empty;
+    private string importJobDescription = string.Empty;
+    private string importContentLocation = string.Empty;
+    private string importRemoteStartedUtc = string.Empty;
+    private ExportType importExportType = ExportType.Group;
+    private string importGroupId = string.Empty;
+    private string importSinceUtc = string.Empty;
+    private string importResourceTypes = "Patient,Encounter,Observation,Condition,MedicationRequest";
+    private string importTypeFilters = string.Empty;
+    private string importVendorOptionsJson = "{}";
+    private JobPriority importPriority = JobPriority.Normal;
+    private bool importAutomaticCleanup;
     private string connectionSiteName = string.Empty;
     private string connectionFhirBaseUrl = string.Empty;
     private string connectionClientId = string.Empty;
@@ -92,6 +107,7 @@ public sealed class MainViewModel : ObservableObject
         RefreshCommand = new AsyncRelayCommand(() => RunAsync(() => RefreshAsync()));
         SearchCommand = new AsyncRelayCommand(() => RunAsync(() => RefreshJobsAsync()));
         CreateJobCommand = new AsyncRelayCommand(() => RunAsync(CreateJobAsync));
+        ImportExistingCommand = new AsyncRelayCommand(() => RunAsync(ImportExistingExportAsync));
         StartCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.StartAsync(job.Id, CancellationToken.None))), () => SelectedJob?.State == ExportJobState.Draft);
         StatusNowCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.GetStatusNowAsync(job.Id, CancellationToken.None))), () => SelectedJob is { HasConfirmedRemoteJob: true, State: ExportJobState.WaitingForPoll or ExportJobState.Running or ExportJobState.RetryPending });
         PauseCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.PauseAsync(job.Id, CancellationToken.None))), () => SelectedJob?.State is ExportJobState.Queued or ExportJobState.Authenticating or ExportJobState.Running or ExportJobState.WaitingForPoll or ExportJobState.QueuedForDownload or ExportJobState.Downloading);
@@ -119,6 +135,7 @@ public sealed class MainViewModel : ObservableObject
     public ICommand RefreshCommand { get; }
     public ICommand SearchCommand { get; }
     public ICommand CreateJobCommand { get; }
+    public ICommand ImportExistingCommand { get; }
     public ICommand StartCommand { get; }
     public ICommand StatusNowCommand { get; }
     public ICommand PauseCommand { get; }
@@ -190,6 +207,33 @@ public sealed class MainViewModel : ObservableObject
     }
     public Site? SelectedSite { get => selectedSite; set => SetProperty(ref selectedSite, value); }
     public CredentialProfile? SelectedCredential { get => selectedCredential; set => SetProperty(ref selectedCredential, value); }
+    public Vendor? SelectedImportVendor
+    {
+        get => selectedImportVendor;
+        set
+        {
+            if (SetProperty(ref selectedImportVendor, value) && value is not null)
+            {
+                SelectedImportSite = Sites.FirstOrDefault(x => x.VendorId == value.Id);
+                SelectedImportCredential = Credentials.FirstOrDefault(x =>
+                    x.Id == SelectedImportSite?.CredentialProfileId && x.VendorId == value.Id)
+                    ?? Credentials.FirstOrDefault(x => x.VendorId == value.Id);
+            }
+        }
+    }
+    public Site? SelectedImportSite
+    {
+        get => selectedImportSite;
+        set
+        {
+            if (SetProperty(ref selectedImportSite, value) && value is not null)
+            {
+                SelectedImportCredential = Credentials.FirstOrDefault(x => x.Id == value.CredentialProfileId)
+                    ?? Credentials.FirstOrDefault(x => x.VendorId == value.VendorId);
+            }
+        }
+    }
+    public CredentialProfile? SelectedImportCredential { get => selectedImportCredential; set => SetProperty(ref selectedImportCredential, value); }
     public Vendor? SelectedConnectionVendor { get => selectedConnectionVendor; set { if (SetProperty(ref selectedConnectionVendor, value)) CommandManager.InvalidateRequerySuggested(); } }
     public Site? SelectedConnectionSite { get => selectedConnectionSite; set { if (SetProperty(ref selectedConnectionSite, value)) CommandManager.InvalidateRequerySuggested(); } }
     public string SearchText { get => searchText; set => SetProperty(ref searchText, value); }
@@ -204,6 +248,18 @@ public sealed class MainViewModel : ObservableObject
     public string NewVendorOptionsJson { get => newVendorOptionsJson; set => SetProperty(ref newVendorOptionsJson, value); }
     public JobPriority NewPriority { get => newPriority; set => SetProperty(ref newPriority, value); }
     public bool NewAutomaticCleanup { get => newAutomaticCleanup; set => SetProperty(ref newAutomaticCleanup, value); }
+    public string ImportJobName { get => importJobName; set => SetProperty(ref importJobName, value); }
+    public string ImportJobDescription { get => importJobDescription; set => SetProperty(ref importJobDescription, value); }
+    public string ImportContentLocation { get => importContentLocation; set => SetProperty(ref importContentLocation, value); }
+    public string ImportRemoteStartedUtc { get => importRemoteStartedUtc; set => SetProperty(ref importRemoteStartedUtc, value); }
+    public ExportType ImportExportType { get => importExportType; set => SetProperty(ref importExportType, value); }
+    public string ImportGroupId { get => importGroupId; set => SetProperty(ref importGroupId, value); }
+    public string ImportSinceUtc { get => importSinceUtc; set => SetProperty(ref importSinceUtc, value); }
+    public string ImportResourceTypes { get => importResourceTypes; set => SetProperty(ref importResourceTypes, value); }
+    public string ImportTypeFilters { get => importTypeFilters; set => SetProperty(ref importTypeFilters, value); }
+    public string ImportVendorOptionsJson { get => importVendorOptionsJson; set => SetProperty(ref importVendorOptionsJson, value); }
+    public JobPriority ImportPriority { get => importPriority; set => SetProperty(ref importPriority, value); }
+    public bool ImportAutomaticCleanup { get => importAutomaticCleanup; set => SetProperty(ref importAutomaticCleanup, value); }
     public string ConnectionSiteName { get => connectionSiteName; set => SetProperty(ref connectionSiteName, value); }
     public string ConnectionFhirBaseUrl { get => connectionFhirBaseUrl; set => SetProperty(ref connectionFhirBaseUrl, value); }
     public string ConnectionClientId { get => connectionClientId; set => SetProperty(ref connectionClientId, value); }
@@ -237,6 +293,10 @@ public sealed class MainViewModel : ObservableObject
         SelectedVendor ??= Vendors.FirstOrDefault();
         SelectedSite ??= Sites.FirstOrDefault();
         SelectedCredential ??= Credentials.FirstOrDefault();
+        SelectedImportVendor ??= Vendors.FirstOrDefault();
+        SelectedImportSite ??= Sites.FirstOrDefault(x => x.VendorId == SelectedImportVendor?.Id);
+        SelectedImportCredential ??= Credentials.FirstOrDefault(x => x.Id == SelectedImportSite?.CredentialProfileId)
+            ?? Credentials.FirstOrDefault(x => x.VendorId == SelectedImportVendor?.Id);
         SelectedConnectionVendor ??= Vendors.FirstOrDefault();
         SelectedConnectionSite ??= Sites.FirstOrDefault();
         await RefreshJobsAsync(cancellationToken).ConfigureAwait(true);
@@ -336,6 +396,67 @@ public sealed class MainViewModel : ObservableObject
         NewJobDescription = string.Empty;
         StatusMessage = $"Draft {id:D} created. No remote export was started.";
         await RefreshJobsAsync().ConfigureAwait(true);
+    }
+
+    private async Task ImportExistingExportAsync()
+    {
+        if (SelectedImportVendor is null || SelectedImportSite is null || SelectedImportCredential is null)
+        {
+            throw new InvalidOperationException("Configure and select a vendor, site, and credential profile first.");
+        }
+
+        using (JsonDocument.Parse(string.IsNullOrWhiteSpace(ImportVendorOptionsJson) ? "{}" : ImportVendorOptionsJson))
+        {
+        }
+
+        DateTimeOffset? remoteStartedAtUtc = null;
+        if (!string.IsNullOrWhiteSpace(ImportRemoteStartedUtc))
+        {
+            if (!DateTimeOffset.TryParse(ImportRemoteStartedUtc, out var parsedRemoteStartedAtUtc))
+            {
+                throw new InvalidOperationException("Remote start time must be a valid date/time with timezone, or blank.");
+            }
+
+            remoteStartedAtUtc = parsedRemoteStartedAtUtc;
+        }
+
+        DateTimeOffset? sinceUtc = null;
+        if (!string.IsNullOrWhiteSpace(ImportSinceUtc))
+        {
+            if (!DateTimeOffset.TryParse(ImportSinceUtc, out var parsedSinceUtc))
+            {
+                throw new InvalidOperationException("_since must be a valid date/time with timezone, or blank.");
+            }
+
+            sinceUtc = parsedSinceUtc;
+        }
+
+        var command = new ImportExistingExportCommand(
+            ImportJobName,
+            ImportJobDescription,
+            SelectedImportVendor.Id,
+            SelectedImportSite.Id,
+            SelectedImportCredential.Id,
+            ImportContentLocation,
+            remoteStartedAtUtc,
+            ImportExportType,
+            string.IsNullOrWhiteSpace(ImportGroupId) ? null : ImportGroupId,
+            sinceUtc,
+            SplitValues(ImportResourceTypes, ','),
+            SplitValues(ImportTypeFilters, ';'),
+            "application/fhir+ndjson",
+            string.IsNullOrWhiteSpace(ImportVendorOptionsJson) ? "{}" : ImportVendorOptionsJson,
+            DataRoot,
+            ImportAutomaticCleanup,
+            ImportPriority);
+        var id = await jobService.ImportExistingAsync(command, CancellationToken.None).ConfigureAwait(true);
+        ImportJobName = string.Empty;
+        ImportJobDescription = string.Empty;
+        ImportContentLocation = string.Empty;
+        ImportRemoteStartedUtc = string.Empty;
+        await RefreshJobsAsync().ConfigureAwait(true);
+        SelectedJob = Jobs.FirstOrDefault(x => x.Id == id);
+        StatusMessage = $"Existing export {id:D} imported. Monitoring was queued without sending $export.";
     }
 
     private async Task RunSelectedAsync(Func<ExportJob, Task<JobActionResult>> operation)
