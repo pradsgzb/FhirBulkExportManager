@@ -9,7 +9,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="58" />
             <RowDefinition Height="*" />
-            <RowDefinition Height="32" />
+            <RowDefinition Height="44" />
         </Grid.RowDefinitions>
 
         <Border Background="#0F3B4C" Padding="20,0">
@@ -234,6 +234,7 @@
                         <Button Content="Get Status Now" Command="{Binding StatusNowCommand}" />
                         <Button Content="Pause Local Processing" Command="{Binding PauseCommand}" />
                         <Button Content="Resume Local Processing" Command="{Binding ResumeCommand}" />
+                        <Button Content="Resume Remaining Downloads" Command="{Binding ResumeDownloadsCommand}" Background="{StaticResource PrimaryBrush}" Foreground="White" ToolTip="Retry only unfinished manifest files. Already validated files are retained." AutomationProperties.Name="Resume remaining file downloads" />
                         <Button Content="Cancel Remote Export" Foreground="{StaticResource DangerBrush}" Command="{Binding CancelRemoteCommand}" />
                         <Button Content="Approve Partial Export" Command="{Binding ApprovePartialCommand}" />
                         <Button Content="Cleanup Remote Export" Foreground="{StaticResource DangerBrush}" Command="{Binding CleanupRemoteCommand}" />
@@ -382,7 +383,7 @@
                         <Button DockPanel.Dock="Right" Content="Restore Defaults" Command="{Binding RestoreDefaultOptionsCommand}" MinWidth="125" />
                         <StackPanel>
                             <TextBlock Text="Options" FontSize="24" FontWeight="SemiBold" />
-                            <TextBlock Text="Choose a category. Editable options are saved automatically for this Windows installation." Foreground="#475467" />
+                            <TextBlock Text="Choose a category. General options save automatically; runtime and storage changes are applied explicitly after restart." Foreground="#475467" />
                         </StackPanel>
                     </DockPanel>
 
@@ -419,6 +420,18 @@
                                 <TextBlock Text="{Binding DateDisplayDescription}" Foreground="#475467" TextWrapping="Wrap" />
                                 <Border Background="#F9FAFB" BorderBrush="#EAECF0" BorderThickness="1" CornerRadius="4" Padding="14" Margin="0,20,0,0">
                                     <TextBlock Text="Durable timestamps continue to be stored in UTC. This option changes presentation only, including job grids, history, metadata history, and HTTP exchange timing." TextWrapping="Wrap" />
+                                </Border>
+                            </StackPanel>
+                        </TabItem>
+
+                        <TabItem Header="Downloads">
+                            <StackPanel Margin="28" MaxWidth="820" HorizontalAlignment="Left">
+                                <TextBlock Text="Download Recovery" FontSize="22" FontWeight="SemiBold" />
+                                <Separator Margin="0,8,0,18" />
+                                <CheckBox Content="Automatically resume interrupted downloads (remaining files only)" IsChecked="{Binding AutomaticallyResumeDownloads}" FontSize="15" />
+                                <TextBlock Text="When a VPN, network, token-renewal, throttling, or temporary server failure interrupts a download, the app keeps the job recoverable and retries with increasing backoff. Files that already passed checksum and NDJSON validation are never downloaded again." TextWrapping="Wrap" Foreground="#475467" Margin="22,10,0,0" />
+                                <Border Background="#EFF8FF" BorderBrush="#84CAFF" BorderThickness="1" CornerRadius="4" Padding="14" Margin="0,22,0,0">
+                                    <TextBlock Text="This option takes effect immediately and does not require an application restart. HTTP authorization/validation errors that are not transient still stop safely and require the Resume Remaining Downloads action after their cause is corrected." TextWrapping="Wrap" Foreground="#175CD3" />
                                 </Border>
                             </StackPanel>
                         </TabItem>
@@ -474,17 +487,45 @@
                                 <StackPanel Margin="28" MaxWidth="850" HorizontalAlignment="Left">
                                     <TextBlock Text="Runtime &amp; Storage" FontSize="22" FontWeight="SemiBold" />
                                     <Separator Margin="0,8,0,18" />
-                                    <TextBlock Text="Deployment-controlled values" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,12" />
+                                    <TextBlock Text="Worker and managed storage configuration" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                    <TextBlock Text="Edits are validated and staged. They become active only after this application restarts; Windows does not need to reboot." Foreground="#475467" TextWrapping="Wrap" Margin="0,0,0,16" />
                                     <Grid>
-                                        <Grid.ColumnDefinitions><ColumnDefinition Width="300" /><ColumnDefinition Width="450" /></Grid.ColumnDefinitions>
-                                        <Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
-                                        <TextBlock Text="Configured export worker limit" /><TextBlock Grid.Column="1" Text="{Binding ConfiguredExportLimit}" FontWeight="SemiBold" />
-                                        <TextBlock Grid.Row="1" Text="Detected logical processors" /><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DetectedLogicalProcessors}" FontWeight="SemiBold" />
-                                        <TextBlock Grid.Row="2" Text="Effective export worker limit" /><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding EffectiveExportLimit}" FontWeight="SemiBold" />
-                                        <TextBlock Grid.Row="3" Text="Per-site file download limit" /><TextBlock Grid.Row="3" Grid.Column="1" Text="{Binding PerSiteDownloadLimit}" FontWeight="SemiBold" />
-                                        <TextBlock Grid.Row="4" Text="Minimum free disk reserve (GB)" /><TextBlock Grid.Row="4" Grid.Column="1" Text="{Binding MinimumFreeDiskSpaceGB}" FontWeight="SemiBold" />
-                                        <TextBlock Grid.Row="5" Text="Managed data root" /><TextBlock Grid.Row="5" Grid.Column="1" Text="{Binding DataRoot}" TextWrapping="Wrap" FontFamily="Consolas" />
+                                        <Grid.ColumnDefinitions><ColumnDefinition Width="300" /><ColumnDefinition Width="500" /></Grid.ColumnDefinitions>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="46"/><RowDefinition Height="32"/><RowDefinition Height="32"/>
+                                            <RowDefinition Height="46"/><RowDefinition Height="42"/><RowDefinition Height="Auto"/>
+                                        </Grid.RowDefinitions>
+                                        <TextBlock Text="Configured export worker limit" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Slider Minimum="1" Maximum="{Binding DetectedLogicalProcessors}" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding ConfiguredExportLimit}" Width="360" AutomationProperties.Name="Configured export worker limit" />
+                                            <TextBlock Text="{Binding ConfiguredExportLimit}" FontWeight="SemiBold" Margin="14,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="1" Text="Detected logical processors" VerticalAlignment="Center" /><TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding DetectedLogicalProcessors}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        <TextBlock Grid.Row="2" Text="Effective export worker limit" VerticalAlignment="Center" /><TextBlock Grid.Row="2" Grid.Column="1" Text="{Binding EffectiveExportLimit}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                                        <TextBlock Grid.Row="3" Text="Per-site file download limit" VerticalAlignment="Center" />
+                                        <StackPanel Grid.Row="3" Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                            <Slider Minimum="1" Maximum="4" TickFrequency="1" IsSnapToTickEnabled="True" Value="{Binding PerSiteDownloadLimit}" Width="360" AutomationProperties.Name="Per-site file download limit" />
+                                            <TextBlock Text="{Binding PerSiteDownloadLimit}" FontWeight="SemiBold" Margin="14,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                        <TextBlock Grid.Row="4" Text="Minimum free disk reserve (GB)" VerticalAlignment="Center" />
+                                        <TextBox Grid.Row="4" Grid.Column="1" Text="{Binding MinimumFreeDiskSpaceGB, UpdateSourceTrigger=PropertyChanged}" Width="120" HorizontalAlignment="Left" AutomationProperties.Name="Minimum free disk reserve in GB" />
+                                        <TextBlock Grid.Row="5" Text="Managed data root" VerticalAlignment="Top" Margin="0,9,0,0" />
+                                        <Grid Grid.Row="5" Grid.Column="1">
+                                            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                                            <TextBox Text="{Binding DataRoot, UpdateSourceTrigger=PropertyChanged}" FontFamily="Consolas" TextWrapping="Wrap" MinHeight="58" VerticalContentAlignment="Center" AutomationProperties.Name="Managed data root" />
+                                            <Button Grid.Column="1" Content="Browse…" Command="{Binding BrowseDataRootCommand}" MinWidth="90" VerticalAlignment="Center" />
+                                        </Grid>
                                     </Grid>
+                                    <TextBlock Text="{Binding RuntimeSettingsStatus}" TextWrapping="Wrap" Foreground="#475467" Margin="0,16,0,7" />
+                                    <WrapPanel>
+                                        <Button Content="Apply Changes" Command="{Binding ApplyRuntimeSettingsCommand}" MinWidth="125" Background="{StaticResource PrimaryBrush}" Foreground="White" />
+                                        <Button Content="Discard Changes" Command="{Binding DiscardRuntimeSettingsCommand}" MinWidth="125" />
+                                        <Button Content="Restore Deployment Defaults" Command="{Binding RestoreRuntimeDefaultsCommand}" MinWidth="190" />
+                                        <Button Content="Restart Now" Command="{Binding RestartNowCommand}" MinWidth="110" />
+                                    </WrapPanel>
+                                    <Border Background="#EFF8FF" BorderBrush="#84CAFF" BorderThickness="1" Padding="14" Margin="0,18,0,0">
+                                        <TextBlock Text="Detected logical processors is read from the machine. Effective export workers is the smaller of the configured limit and detected processor count. New jobs continue using the active data root until restart." TextWrapping="Wrap" Foreground="#175CD3" />
+                                    </Border>
                                     <Border Background="#FFFAEB" BorderBrush="#FEC84B" BorderThickness="1" Padding="14" Margin="0,24,0,0">
                                         <TextBlock TextWrapping="Wrap">TLS certificate validation is always enabled. There is no “ignore SSL errors” option. Draft jobs never start automatically, and automatic cleanup is blocked unless the durable local commit is re-verified.</TextBlock>
                                     </Border>
@@ -499,7 +540,26 @@
         </TabControl>
 
         <Border Grid.Row="2" Background="#EAECF0" Padding="12,4">
-            <TextBlock Text="{Binding StatusMessage}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+            <Grid>
+                <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
+                <TextBlock Text="{Binding StatusMessage}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <Border Grid.Column="1" Background="#FFFAEB" BorderBrush="#F79009" BorderThickness="1" CornerRadius="4" Padding="9,2" Margin="10,0,0,0">
+                    <Border.Style>
+                        <Style TargetType="Border">
+                            <Setter Property="Visibility" Value="Collapsed" />
+                            <Style.Triggers>
+                                <DataTrigger Binding="{Binding IsRestartPending}" Value="True">
+                                    <Setter Property="Visibility" Value="Visible" />
+                                </DataTrigger>
+                            </Style.Triggers>
+                        </Style>
+                    </Border.Style>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="{Binding RestartPendingMessage}" Foreground="#B54708" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Button Content="Restart Now" Command="{Binding RestartNowCommand}" Padding="9,2" MinHeight="26" Margin="10,0,0,0" />
+                    </StackPanel>
+                </Border>
+            </Grid>
         </Border>
     </Grid>
 </Window>

@@ -24,6 +24,7 @@ public sealed class ApplicationSettingsAndPasswordTests
                 DateMode = DateDisplayMode.Local,
                 AutoRefreshEnabled = true,
                 AutoRefreshIntervalSeconds = 999,
+                AutomaticallyResumeDownloads = false,
                 MinimizeToTray = false,
             },
             CancellationToken.None);
@@ -31,9 +32,32 @@ public sealed class ApplicationSettingsAndPasswordTests
         Assert.Equal(DateDisplayMode.Local, service.Current.DateMode);
         Assert.Equal(300, service.Current.AutoRefreshIntervalSeconds);
         Assert.True(service.Current.AutoRefreshEnabled);
+        Assert.False(service.Current.AutomaticallyResumeDownloads);
         Assert.False(service.Current.MinimizeToTray);
         Assert.Single(store.Values);
         Assert.Equal("ApplicationPreferencesUpdated", Assert.Single(store.Audits).Action);
+    }
+
+    [Fact]
+    public async Task Automatic_download_resume_is_enabled_by_default()
+    {
+        var service = new ApplicationSettingsService(new MemorySettingsStore(), new TestIdentityProvider(), new FixedTimeProvider(Now));
+
+        var preferences = await service.LoadAsync(CancellationToken.None);
+
+        Assert.True(preferences.AutomaticallyResumeDownloads);
+    }
+
+    [Fact]
+    public async Task Existing_preferences_without_download_option_receive_safe_enabled_default()
+    {
+        var store = new MemorySettingsStore();
+        store.Values["application.preferences.v1"] = "{\"dateMode\":0,\"autoRefreshEnabled\":false,\"autoRefreshIntervalSeconds\":30}";
+        var service = new ApplicationSettingsService(store, new TestIdentityProvider(), new FixedTimeProvider(Now));
+
+        var preferences = await service.LoadAsync(CancellationToken.None);
+
+        Assert.True(preferences.AutomaticallyResumeDownloads);
     }
 
     [Fact]

@@ -42,6 +42,8 @@ public partial class MainWindow : Window
 
     public MainViewModel ViewModel { get; }
 
+    public void PrepareForRestart() => exitConfirmed = true;
+
     private void ClientSecret_PasswordChanged(object sender, RoutedEventArgs e)
     {
         if (sender is PasswordBox box)

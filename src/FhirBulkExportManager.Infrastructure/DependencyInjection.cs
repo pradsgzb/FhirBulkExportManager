@@ -50,6 +50,7 @@ public static class DependencyInjection
         }
 
         services.AddSingleton<IManagedStorage, ManagedStorage>();
+        services.AddSingleton<IManagedDataRootMigrationService, ManagedDataRootMigrationService>();
         services.AddSingleton<INdjsonValidator, NdjsonValidator>();
         services.AddSingleton<ILocalCommitService, LocalCommitService>();
         services.AddSingleton<IFileDownloadService, SecureFileDownloadService>();

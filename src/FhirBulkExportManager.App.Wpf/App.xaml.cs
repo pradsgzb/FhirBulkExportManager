@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO;
 using System.Threading;
 using System.Windows;
@@ -27,6 +28,12 @@ public partial class App : System.Windows.Application
     protected override async void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);
+        if (!await WaitForRestartPredecessorAsync(e.Args).ConfigureAwait(true))
+        {
+            Shutdown(4);
+            return;
+        }
+
         singleInstanceMutex = new Mutex(initiallyOwned: true, "Local\\FhirBulkExportManager-1.0", out var createdNew);
         ownsSingleInstanceMutex = createdNew;
         if (!createdNew)
@@ -83,6 +90,41 @@ public partial class App : System.Windows.Application
                 return;
             }
 
+            var runtimeConfigurationService = host.Services.GetRequiredService<RuntimeConfigurationService>();
+            var runtimeConfiguration = await runtimeConfigurationService
+                .LoadAsync(CancellationToken.None).ConfigureAwait(true);
+            var migrationService = host.Services.GetRequiredService<IManagedDataRootMigrationService>();
+            if (runtimeConfiguration.PendingDataRootMigration is { } pendingMigration)
+            {
+                dialogs.ShowInfo(
+                    "Managed data migration",
+                    "The approved managed-data-root change will now be applied before export workers start. " +
+                    "For large data folders this can take time. Do not end the application process.\n\n" +
+                    $"From: {pendingMigration.SourceDataRoot}\n" +
+                    $"To: {pendingMigration.TargetDataRoot}");
+                var result = await migrationService
+                    .MigrateAsync(pendingMigration, CancellationToken.None).ConfigureAwait(true);
+                runtimeConfiguration = await runtimeConfigurationService
+                    .CompleteDataRootMigrationAsync(CancellationToken.None).ConfigureAwait(true);
+                try
+                {
+                    migrationService.CleanupCompletedMigrationArtifacts(runtimeConfiguration.DataRoot);
+                }
+                catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+                {
+                    dialogs.ShowError(
+                        "Migration cleanup warning",
+                        "Managed data was moved and verified, but an internal migration marker could not be removed. " + exception.Message);
+                }
+
+                var method = result.UsedAtomicMove ? "moved atomically" : "copied and checksum-verified";
+                dialogs.ShowInfo(
+                    "Managed data migration completed",
+                    $"The managed data root was {method}. {result.FilesMoved:N0} file(s), {result.BytesMoved:N0} byte(s). Export workers can now resume safely.");
+            }
+
+            runtimeConfigurationService.ApplyAtStartup(runtimeConfiguration);
+
             await host.Services.GetRequiredService<FirstRunBootstrapper>().InitializeAsync(CancellationToken.None).ConfigureAwait(true);
             await host.StartAsync().ConfigureAwait(true);
             var window = host.Services.GetRequiredService<MainWindow>();
@@ -94,6 +136,44 @@ public partial class App : System.Windows.Application
         {
             System.Windows.MessageBox.Show("The application could not start safely. No export was started.\n\n" + exception.Message, "Startup failure", MessageBoxButton.OK, MessageBoxImage.Error);
             Shutdown(1);
+        }
+    }
+
+    private static async Task<bool> WaitForRestartPredecessorAsync(IReadOnlyCollection<string> arguments)
+    {
+        const string prefix = "--restart-after=";
+        var value = arguments.FirstOrDefault(argument => argument.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        if (value is null ||
+            !int.TryParse(value[prefix.Length..], System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var processId) ||
+            processId <= 0 ||
+            processId == Environment.ProcessId)
+        {
+            return true;
+        }
+
+        try
+        {
+            using var predecessor = Process.GetProcessById(processId);
+            using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+            await predecessor.WaitForExitAsync(timeout.Token).ConfigureAwait(true);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            System.Windows.MessageBox.Show(
+                "The previous application process did not exit within 60 seconds. Start the application again after confirming the old process has closed.",
+                "Restart timed out",
+                MessageBoxButton.OK,
+                MessageBoxImage.Error);
+            return false;
         }
     }
 

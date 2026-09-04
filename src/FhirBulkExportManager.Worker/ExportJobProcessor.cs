@@ -435,12 +435,37 @@ public sealed class ExportJobProcessor(
             job.RecordFailure("FileProcessingFailed", result.SafeError ?? "A file failed.", incrementRetry: false);
             await PersistTransitionAsync(job, aggregateExpectedVersion, ExportJobState.FailedPermanent, "FileProcessingFailed", "One or more files could not be downloaded and validated.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
         }
+        else if (result.RetryLater)
+        {
+            job.ScheduleRetry(
+                DefaultPollAt(job.RetryCount),
+                "DownloadRetry",
+                result.SafeError ?? "A transient download failure will be retried.");
+            await PersistTransitionAsync(
+                job,
+                aggregateExpectedVersion,
+                ExportJobState.RetryPending,
+                "DownloadRetryScheduled",
+                "An unfinished file will be retried with backoff; already validated files remain complete.",
+                Guid.NewGuid().ToString("N"),
+                cancellationToken).ConfigureAwait(false);
+        }
         else if (result.AllValidated)
         {
+            if (job.RetryCount > 0 || job.LastErrorCode is not null || job.LastErrorMessage is not null)
+            {
+                job.ClearFailure();
+            }
+
             await PersistTransitionAsync(job, aggregateExpectedVersion, ExportJobState.Validating, "AllFilesValidated", "All required manifest files are downloaded, checksummed, and validated.", Guid.NewGuid().ToString("N"), cancellationToken).ConfigureAwait(false);
         }
         else
         {
+            if (job.RetryCount > 0 || job.LastErrorCode is not null || job.LastErrorMessage is not null)
+            {
+                job.ClearFailure();
+            }
+
             var operationId = Guid.NewGuid();
             var message = $"{downloadedFiles:N0} of {files.Count:N0} files downloaded; {validatedFiles:N0} validated.";
             var jobEvent = new ExportJobEvent(

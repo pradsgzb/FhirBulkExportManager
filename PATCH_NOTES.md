@@ -1,61 +1,55 @@
-# Imported Job Connection Repair Fix
+# Download recovery fixes
 
-This archive contains only replacement files for the manually imported `Content-Location` authentication issue. Extract it into the `FhirBulkExportManager` repository root and overwrite the matching files.
+This archive contains only the changed and new files for the interrupted-download fix. It is not a complete source tree.
 
-## Root cause
+## Apply the fix
 
-The affected existing job was persisted with the anonymous `public-fhir-r4` plugin/connection. That adapter intentionally does not authenticate, which explains why its history contained only one status request and no `Authorization` header. Changing token-refresh behavior alone cannot change the vendor, site, credential, and plugin identifiers already stored on that job.
+1. Close **Enterprise FHIR Bulk Export Manager** and Visual Studio.
+2. Extract this ZIP into the root of your existing `FhirBulkExportManager` repository.
+3. Keep the directory structure and approve replacement of the existing files.
+4. From the repository root, run:
 
-## Fixed behavior
+   ```powershell
+   dotnet build FhirBulkExportManager.sln -c Release --no-restore
+   ```
 
-- Adds an explicit repair action for an existing externally-started job. It reassigns the selected job to the correct saved vendor/site/credential/plugin without sending `$export`.
-- Preserves the exact opaque `Content-Location`, start information, and all existing status/HTTP history.
-- Records an `ImportedConnectionReassigned` event, clears the obsolete retry error, and queues an immediate authenticated status check.
-- Limits repair to externally-started jobs that have a confirmed `Content-Location` and have not received a manifest. Locally-started exports cannot be reassigned.
-- Requires the `Content-Location` and selected site base URL to have the same scheme, host, and port. New imports receive the same validation, preventing this mismatch from recurring.
-- Displays the persisted plugin ID and version in the jobs grid so an anonymous assignment is visible.
-- Stops an anonymous Public/Open FHIR job on HTTP 401 with `AnonymousConnectionCannotAuthenticate` instead of scheduling an authentication loop that can never succeed.
-- Retains the earlier imported-job token protections: first-poll forced authentication, cached-token 401 refresh/retry once, nonempty token validation, and site-assigned credential enforcement.
+No database migration and no new NuGet package are required.
 
-There is no database schema change and no migration in this patch.
+## Recover the currently failed job
 
-## Apply and build
+1. Reconnect the VPN and confirm the saved connection is correct.
+2. Open **Dashboard & Jobs** and select the failed job.
+3. Click **Resume Remaining Downloads** and confirm.
 
-1. Close the running application.
-2. Extract this ZIP into the repository root (the folder containing `FhirBulkExportManager.sln`) and allow replacement of matching files.
-3. Run:
+The action retains every file already checksummed and NDJSON-validated. It queues only unfinished file entries and does not send `$export`, poll the export status, or modify the remote export.
 
-```powershell
-dotnet build FhirBulkExportManager.sln -c Release --no-restore
-dotnet test FhirBulkExportManager.sln -c Release --no-build
-```
+## Automatic recovery option
 
-## Repair the affected job
+Open **Options > Downloads** and enable **Automatically resume interrupted downloads (remaining files only)**. It is enabled by default, including for installations whose older preferences do not contain this option.
 
-1. Start the application and select the affected row on **Dashboard & Jobs**.
-2. Confirm that its **Plugin** column shows `public-fhir-r4` (the bad persisted assignment).
-3. Open **Import Existing Export**.
-4. Select the eClinicalWorks vendor and the correct `GBCJCD` site connection. The site-assigned credential is selected automatically.
-5. Select **Repair Selected Imported Job with This Connection** and confirm.
+Transient network, VPN, timeout, throttling, server, truncated-transfer, and stale byte-range failures retry with exponential backoff. An HTTP 401 invalidates the cached bearer token and uses a bounded refresh retry. Bad requests, forbidden responses, and invalid NDJSON still stop safely for operator review.
 
-No form values need to be re-entered. The action operates on the job selected in **Dashboard & Jobs**. It does not create a new job and does not start a new remote export.
+If a complete file is already present locally but validation was interrupted, the app validates the existing bytes before making another network request.
 
-The next poll should preserve three exchanges in its history:
+## Validation performed
 
-1. HealthWizz assertion request
-2. eClinicalWorks OAuth token request
-3. Bulk export status request with `Authorization: [REDACTED]`
+- Full Release rebuild: **succeeded with 0 warnings and 0 errors**.
+- Non-Windows automated tests: **88 passed, 0 failed**.
+- The WPF app and Windows UI test assembly compiled successfully. Windows-only UI tests cannot execute in the Linux validation environment.
 
-## Replacement files
+## Included files
 
-- `src/FhirBulkExportManager.Domain/ExportJob.cs`
+- `src/FhirBulkExportManager.Application/Configuration/ApplicationPreferences.cs`
 - `src/FhirBulkExportManager.Application/Services/ExportJobService.cs`
-- `src/FhirBulkExportManager.Worker/AuthenticationTokenProvider.cs`
+- `src/FhirBulkExportManager.Domain/ExportFile.cs`
+- `src/FhirBulkExportManager.Domain/ExportJob.cs`
+- `src/FhirBulkExportManager.Worker/DownloadCoordinator.cs`
 - `src/FhirBulkExportManager.Worker/ExportJobProcessor.cs`
+- `src/FhirBulkExportManager.Worker/Properties/AssemblyInfo.cs`
 - `src/FhirBulkExportManager.App.Wpf/MainViewModel.cs`
 - `src/FhirBulkExportManager.App.Wpf/MainWindow.xaml`
-- `plugins/FhirBulkExportManager.Plugin.PublicR4/PublicFhirR4Plugin.cs`
-- `tests/FhirBulkExportManager.Domain.Tests/ExportJobStateMachineTests.cs`
-- `tests/FhirBulkExportManager.Application.Tests/AuthenticationTokenProviderTests.cs`
-- `tests/FhirBulkExportManager.Plugin.PublicR4.Tests/PublicFhirR4PluginTests.cs`
-- `docs/IMPORT_EXISTING_EXPORT.md`
+- `tests/FhirBulkExportManager.Application.Tests/ApplicationSettingsAndPasswordTests.cs`
+- `tests/FhirBulkExportManager.Application.Tests/DownloadRetryPolicyTests.cs`
+- `tests/FhirBulkExportManager.Application.Tests/ExportJobStatusRecoveryTests.cs`
+- `tests/FhirBulkExportManager.Domain.Tests/ExportFileTests.cs`
+- `tests/FhirBulkExportManager.Ui.Tests/UiCompositionTests.cs`

@@ -80,7 +80,12 @@ public sealed class ExportFile
         Version++;
     }
 
-    public void CompleteDownload(DateTimeOffset now, long actualBytes, string sha256)
+    public void CompleteDownload(
+        DateTimeOffset now,
+        long actualBytes,
+        string sha256,
+        string? etag = null,
+        DateTimeOffset? lastModifiedUtc = null)
     {
         EnsureStatus(ExportFileStatus.Downloading);
         if (ExpectedBytes is { } expected && expected != actualBytes)
@@ -90,6 +95,8 @@ public sealed class ExportFile
 
         ActualBytes = actualBytes;
         Sha256 = Guard.NotNullOrWhiteSpace(sha256, nameof(sha256));
+        ETag = etag ?? ETag;
+        LastModifiedUtc = lastModifiedUtc ?? LastModifiedUtc;
         DownloadCompletedAtUtc = now;
         Status = ExportFileStatus.Downloaded;
         Version++;
@@ -124,6 +131,26 @@ public sealed class ExportFile
     {
         LastError = SecurityRedactor.Redact(safeError);
         Status = ExportFileStatus.Failed;
+        Version++;
+    }
+
+    public void ResetForDownloadRetry(string reason)
+    {
+        if (Status == ExportFileStatus.Validated)
+        {
+            throw new InvalidOperationException("A validated file cannot be reset for download.");
+        }
+
+        LastError = SecurityRedactor.Redact(reason);
+        Status = ExportFileStatus.RetryPending;
+        AttemptCount = 0;
+        ActualBytes = 0;
+        RecordCount = 0;
+        Sha256 = null;
+        DownloadCompletedAtUtc = null;
+        ValidatedAtUtc = null;
+        ValidationSummaryJson = "{}";
+        HasSeriousOperationOutcome = false;
         Version++;
     }
 

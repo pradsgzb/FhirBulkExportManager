@@ -1,3 +1,4 @@
+using FhirBulkExportManager.Application.Configuration;
 using FhirBulkExportManager.Domain;
 using FhirBulkExportManager.PluginContracts;
 
@@ -142,4 +143,18 @@ public interface IDiagnosticBundleService
 public interface ITransientNotificationService
 {
     void ShowNetworkAccessHint(string operation);
+}
+
+public sealed record DataRootMigrationResult(
+    bool SourceExisted,
+    bool UsedAtomicMove,
+    long FilesMoved,
+    long BytesMoved);
+
+public interface IManagedDataRootMigrationService
+{
+    bool HasContent(string dataRoot);
+    void ValidateMove(DataRootMigrationRequest request);
+    Task<DataRootMigrationResult> MigrateAsync(DataRootMigrationRequest request, CancellationToken cancellationToken);
+    void CleanupCompletedMigrationArtifacts(string dataRoot);
 }

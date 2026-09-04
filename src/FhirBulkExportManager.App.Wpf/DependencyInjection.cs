@@ -10,6 +10,7 @@ public static class DependencyInjection
     {
         services.AddSingleton<IUserDialogService, UserDialogService>();
         services.AddSingleton<IWindowNavigationService, WindowNavigationService>();
+        services.AddSingleton<IApplicationRestartService, ApplicationRestartService>();
         services.AddSingleton<ITransientNotificationService, TransientNotificationService>();
         services.AddSingleton<FirstRunBootstrapper>();
         services.AddTransient<MainViewModel>();

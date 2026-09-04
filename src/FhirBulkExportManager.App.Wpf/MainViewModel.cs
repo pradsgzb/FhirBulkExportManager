@@ -13,7 +13,6 @@ using FhirBulkExportManager.Domain;
 using FhirBulkExportManager.PluginContracts;
 using FhirBulkExportManager.Shared;
 using FhirBulkExportManager.Worker;
-using Microsoft.Extensions.Options;
 
 namespace FhirBulkExportManager.App.Wpf;
 
@@ -34,6 +33,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private readonly ApplicationSettingsService applicationSettings;
     private readonly PasswordProtectionService passwordProtection;
     private readonly ITransientNotificationService transientNotifications;
+    private readonly RuntimeConfigurationService runtimeConfigurationService;
+    private readonly IManagedDataRootMigrationService dataRootMigrationService;
+    private readonly IApplicationRestartService applicationRestartService;
     private readonly DispatcherTimer autoRefreshTimer;
     private readonly DispatcherTimer settingsSaveTimer;
     private IReadOnlyList<ExportJobEvent> selectedJobEvents = [];
@@ -42,6 +44,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private DateDisplayMode dateDisplayMode = DateDisplayMode.Utc;
     private bool autoRefreshEnabled;
     private int autoRefreshIntervalSeconds = 30;
+    private bool automaticallyResumeDownloads = true;
     private DateTimeOffset? nextAutoRefreshAtUtc;
     private string autoRefreshCountdownText = "Auto refresh off";
     private bool minimizeToTray = true;
@@ -51,7 +54,16 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     private bool initialized;
     private bool refreshInProgress;
     private bool settingsDirty;
+    private bool runtimeSettingsDirty;
+    private bool isRestartPending;
     private bool disposed;
+    private int configuredExportLimit = 1;
+    private int perSiteDownloadLimit = 1;
+    private int minimumFreeDiskSpaceGB = 1;
+    private string dataRoot = string.Empty;
+    private string activeDataRoot = string.Empty;
+    private string runtimeSettingsStatus = "Runtime and storage settings are active.";
+    private string restartPendingMessage = string.Empty;
     private ExportJob? selectedJob;
     private JobStatusHistoryItem? selectedStatusHistory;
     private HttpExchangeViewItem? selectedHttpExchange;
@@ -121,8 +133,9 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ApplicationSettingsService applicationSettings,
         PasswordProtectionService passwordProtection,
         ITransientNotificationService transientNotifications,
-        IOptions<ProcessingOptions> processingOptions,
-        IOptions<StorageOptions> storageOptions,
+        RuntimeConfigurationService runtimeConfigurationService,
+        IManagedDataRootMigrationService dataRootMigrationService,
+        IApplicationRestartService applicationRestartService,
         TimeProvider timeProvider)
     {
         this.jobService = jobService;
@@ -138,13 +151,12 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         this.applicationSettings = applicationSettings;
         this.passwordProtection = passwordProtection;
         this.transientNotifications = transientNotifications;
+        this.runtimeConfigurationService = runtimeConfigurationService;
+        this.dataRootMigrationService = dataRootMigrationService;
+        this.applicationRestartService = applicationRestartService;
         this.timeProvider = timeProvider;
-        ConfiguredExportLimit = processingOptions.Value.MaxConcurrentExports;
-        EffectiveExportLimit = processingOptions.Value.EffectiveMaxConcurrentExports;
-        DetectedLogicalProcessors = Environment.ProcessorCount;
-        PerSiteDownloadLimit = processingOptions.Value.PerSiteFileDownloadLimit;
-        DataRoot = storageOptions.Value.DataRoot;
-        MinimumFreeDiskSpaceGB = storageOptions.Value.MinimumFreeDiskSpaceGB;
+        ApplyRuntimeConfigurationDraft(runtimeConfigurationService.Current);
+        activeDataRoot = runtimeConfigurationService.Applied.DataRoot;
 
         RefreshCommand = new AsyncRelayCommand(() => RunAsync(() => RefreshAsync()));
         SearchCommand = new AsyncRelayCommand(() => RunAsync(() => RefreshJobsAsync()));
@@ -173,6 +185,10 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                    job.State == ExportJobState.FailedPermanent && job.ManifestJson is null));
         PauseCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.PauseAsync(job.Id, CancellationToken.None))), () => SelectedJob?.State is ExportJobState.Queued or ExportJobState.Authenticating or ExportJobState.Running or ExportJobState.WaitingForPoll or ExportJobState.QueuedForDownload or ExportJobState.Downloading);
         ResumeCommand = new AsyncRelayCommand(() => RunAsync(() => RunSelectedAsync(job => jobService.ResumeAsync(job.Id, CancellationToken.None))), () => SelectedJob?.State == ExportJobState.Paused);
+        ResumeDownloadsCommand = new AsyncRelayCommand(
+            () => RunAsync(ResumeRemainingDownloadsAsync),
+            () => SelectedJob is { State: ExportJobState.FailedPermanent, ManifestJson: not null } job &&
+                  job.ValidatedFileCount < job.OutputFileCount + job.DeletedFileCount + job.ErrorFileCount);
         CancelRemoteCommand = new AsyncRelayCommand(() => RunAsync(CancelRemoteAsync), () => SelectedJob is { HasConfirmedRemoteJob: true, State: ExportJobState.Running or ExportJobState.WaitingForPoll or ExportJobState.Paused or ExportJobState.Unknown });
         CleanupRemoteCommand = new AsyncRelayCommand(() => RunAsync(CleanupRemoteAsync), () => SelectedJob?.State == ExportJobState.Committed);
         ApprovePartialCommand = new AsyncRelayCommand(() => RunAsync(ApprovePartialAsync), () => SelectedJob?.State == ExportJobState.HeldForReview);
@@ -193,6 +209,17 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         ChangePasswordCommand = new AsyncRelayCommand(() => RunAsync(ChangePasswordAsync));
         RemovePasswordCommand = new AsyncRelayCommand(() => RunAsync(RemovePasswordAsync), () => PasswordConfigured);
         RestoreDefaultOptionsCommand = new AsyncRelayCommand(() => RunAsync(RestoreDefaultOptionsAsync));
+        BrowseDataRootCommand = new AsyncRelayCommand(() => RunAsync(BrowseDataRootAsync));
+        ApplyRuntimeSettingsCommand = new AsyncRelayCommand(
+            () => RunAsync(ApplyRuntimeSettingsAsync),
+            () => RuntimeSettingsDirty);
+        DiscardRuntimeSettingsCommand = new AsyncRelayCommand(
+            () => RunAsync(DiscardRuntimeSettingsAsync),
+            () => RuntimeSettingsDirty || IsRestartPending);
+        RestoreRuntimeDefaultsCommand = new AsyncRelayCommand(() => RunAsync(RestoreRuntimeDefaultsAsync));
+        RestartNowCommand = new AsyncRelayCommand(
+            () => RunAsync(RestartNowAsync),
+            () => IsRestartPending);
 
         autoRefreshTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
@@ -224,6 +251,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand StatusNowCommand { get; }
     public ICommand PauseCommand { get; }
     public ICommand ResumeCommand { get; }
+    public ICommand ResumeDownloadsCommand { get; }
     public ICommand CancelRemoteCommand { get; }
     public ICommand CleanupRemoteCommand { get; }
     public ICommand ApprovePartialCommand { get; }
@@ -244,13 +272,101 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     public ICommand ChangePasswordCommand { get; }
     public ICommand RemovePasswordCommand { get; }
     public ICommand RestoreDefaultOptionsCommand { get; }
+    public ICommand BrowseDataRootCommand { get; }
+    public ICommand ApplyRuntimeSettingsCommand { get; }
+    public ICommand DiscardRuntimeSettingsCommand { get; }
+    public ICommand RestoreRuntimeDefaultsCommand { get; }
+    public ICommand RestartNowCommand { get; }
 
-    public int ConfiguredExportLimit { get; }
-    public int EffectiveExportLimit { get; }
-    public int DetectedLogicalProcessors { get; }
-    public int PerSiteDownloadLimit { get; }
-    public string DataRoot { get; }
-    public int MinimumFreeDiskSpaceGB { get; }
+    public int ConfiguredExportLimit
+    {
+        get => configuredExportLimit;
+        set
+        {
+            var normalized = Math.Clamp(value, 1, DetectedLogicalProcessors);
+            if (SetProperty(ref configuredExportLimit, normalized))
+            {
+                OnPropertyChanged(nameof(EffectiveExportLimit));
+                RuntimeSettingChanged();
+            }
+        }
+    }
+
+    public int EffectiveExportLimit => Math.Min(ConfiguredExportLimit, DetectedLogicalProcessors);
+    public int DetectedLogicalProcessors => Environment.ProcessorCount;
+
+    public int PerSiteDownloadLimit
+    {
+        get => perSiteDownloadLimit;
+        set
+        {
+            if (SetProperty(ref perSiteDownloadLimit, Math.Clamp(value, 1, 4)))
+            {
+                RuntimeSettingChanged();
+            }
+        }
+    }
+
+    public string DataRoot
+    {
+        get => dataRoot;
+        set
+        {
+            if (SetProperty(ref dataRoot, value ?? string.Empty))
+            {
+                RuntimeSettingChanged();
+            }
+        }
+    }
+
+    public int MinimumFreeDiskSpaceGB
+    {
+        get => minimumFreeDiskSpaceGB;
+        set
+        {
+            if (SetProperty(ref minimumFreeDiskSpaceGB, Math.Clamp(value, 1, 1024)))
+            {
+                RuntimeSettingChanged();
+            }
+        }
+    }
+
+    public bool RuntimeSettingsDirty
+    {
+        get => runtimeSettingsDirty;
+        private set
+        {
+            if (SetProperty(ref runtimeSettingsDirty, value))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
+
+    public bool IsRestartPending
+    {
+        get => isRestartPending;
+        private set
+        {
+            if (SetProperty(ref isRestartPending, value))
+            {
+                CommandManager.InvalidateRequerySuggested();
+            }
+        }
+    }
+
+    public string RuntimeSettingsStatus
+    {
+        get => runtimeSettingsStatus;
+        private set => SetProperty(ref runtimeSettingsStatus, value);
+    }
+
+    public string RestartPendingMessage
+    {
+        get => restartPendingMessage;
+        private set => SetProperty(ref restartPendingMessage, value);
+    }
+
     public Array DateDisplayModes => Enum.GetValues(typeof(DateDisplayMode));
 
     public DateDisplayMode SelectedDateDisplayMode
@@ -307,6 +423,18 @@ public sealed class MainViewModel : ObservableObject, IDisposable
 
     public string AutoRefreshIntervalText => $"{AutoRefreshIntervalSeconds} seconds";
     public string AutoRefreshCountdownText { get => autoRefreshCountdownText; private set => SetProperty(ref autoRefreshCountdownText, value); }
+
+    public bool AutomaticallyResumeDownloads
+    {
+        get => automaticallyResumeDownloads;
+        set
+        {
+            if (SetProperty(ref automaticallyResumeDownloads, value))
+            {
+                PreferencesChanged();
+            }
+        }
+    }
 
     public bool MinimizeToTray
     {
@@ -537,15 +665,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         dateDisplayMode = preferences.DateMode;
         autoRefreshEnabled = preferences.AutoRefreshEnabled;
         autoRefreshIntervalSeconds = preferences.AutoRefreshIntervalSeconds;
+        automaticallyResumeDownloads = preferences.AutomaticallyResumeDownloads;
         minimizeToTray = preferences.MinimizeToTray;
         showNetworkAccessHintOnBadRequest = preferences.ShowNetworkAccessHintOnBadRequest;
         DateTimeDisplayPolicy.Mode = dateDisplayMode;
         PasswordConfigured = await passwordProtection.IsConfiguredAsync(cancellationToken).ConfigureAwait(true);
         SettingsStatus = applicationSettings.LoadWarning ?? "Options are saved automatically.";
+        RuntimeSettingsStatus = runtimeConfigurationService.LoadWarning
+            ?? "Changes in this category are staged explicitly and take effect after an application restart.";
+        RuntimeSettingsDirty = runtimeConfigurationService.LoadWarning is not null;
+        IsRestartPending = !RuntimeConfigurationsMatch(
+            runtimeConfigurationService.Current,
+            runtimeConfigurationService.Applied);
+        RestartPendingMessage = IsRestartPending
+            ? "Application restart pending — staged runtime or storage changes are not active yet."
+            : string.Empty;
         foreach (var propertyName in new[]
         {
             nameof(SelectedDateDisplayMode), nameof(DateDisplayDescription), nameof(AutoRefreshEnabled),
-            nameof(AutoRefreshIntervalSeconds), nameof(AutoRefreshIntervalText), nameof(MinimizeToTray),
+            nameof(AutoRefreshIntervalSeconds), nameof(AutoRefreshIntervalText), nameof(AutomaticallyResumeDownloads), nameof(MinimizeToTray),
             nameof(ShowNetworkAccessHintOnBadRequest),
         })
         {
@@ -724,7 +862,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             SplitValues(NewTypeFilters, ';'),
             "application/fhir+ndjson",
             string.IsNullOrWhiteSpace(NewVendorOptionsJson) ? "{}" : NewVendorOptionsJson,
-            DataRoot,
+            activeDataRoot,
             NewAutomaticCleanup,
             NewPriority);
         var id = await jobService.CreateDraftAsync(command, CancellationToken.None).ConfigureAwait(true);
@@ -782,7 +920,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
             SplitValues(ImportTypeFilters, ';'),
             "application/fhir+ndjson",
             string.IsNullOrWhiteSpace(ImportVendorOptionsJson) ? "{}" : ImportVendorOptionsJson,
-            DataRoot,
+            activeDataRoot,
             ImportAutomaticCleanup,
             ImportPriority);
         var id = await jobService.ImportExistingAsync(command, CancellationToken.None).ConfigureAwait(true);
@@ -834,6 +972,25 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         var result = await operation(job).ConfigureAwait(true);
         StatusMessage = result.Message;
         await RefreshJobsAsync().ConfigureAwait(true);
+    }
+
+    private async Task ResumeRemainingDownloadsAsync()
+    {
+        var job = SelectedJob ?? throw new InvalidOperationException("Select an export job first.");
+        var totalFiles = job.OutputFileCount + job.DeletedFileCount + job.ErrorFileCount;
+        var remainingFiles = Math.Max(0, totalFiles - job.ValidatedFileCount);
+        if (!dialogs.Confirm(
+            "Resume remaining downloads",
+            $"Resume the unfinished files for this job?\n\nJob: {job.Name}\nRemaining: {remainingFiles:N0} of {totalFiles:N0} file(s)\nAlready validated: {job.ValidatedFileCount:N0}\n\nAlready validated files will not be downloaded again. This action does not start a new export, poll its status, or modify the remote export."))
+        {
+            return;
+        }
+
+        var jobId = job.Id;
+        var result = await jobService.ResumeRemainingDownloadsAsync(jobId, CancellationToken.None).ConfigureAwait(true);
+        StatusMessage = result.Message;
+        await RefreshJobsAsync().ConfigureAwait(true);
+        SelectedJob = Jobs.FirstOrDefault(item => item.Id == jobId);
     }
 
     private async Task CancelRemoteAsync()
@@ -1401,7 +1558,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
     {
         if (!dialogs.Confirm(
             "Restore default options",
-            "Restore date display, auto-refresh, tray behavior, and network-hint options to their defaults? Password protection is not changed."))
+            "Restore date display, auto-refresh, download recovery, tray behavior, and network-hint options to their defaults? Password protection is not changed."))
         {
             return;
         }
@@ -1412,18 +1569,190 @@ public sealed class MainViewModel : ObservableObject, IDisposable
         await RefreshJobsAsync().ConfigureAwait(true);
     }
 
+    private Task BrowseDataRootAsync()
+    {
+        var selected = dialogs.SelectFolder("Select the managed data root", DataRoot);
+        if (!string.IsNullOrWhiteSpace(selected))
+        {
+            DataRoot = selected;
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ApplyRuntimeSettingsAsync()
+    {
+        var applied = runtimeConfigurationService.Applied;
+        var proposed = new RuntimeConfiguration
+        {
+            MaxConcurrentExports = ConfiguredExportLimit,
+            PerSiteFileDownloadLimit = PerSiteDownloadLimit,
+            MinimumFreeDiskSpaceGB = MinimumFreeDiskSpaceGB,
+            DataRoot = DataRoot,
+        }.NormalizeAndValidate(DetectedLogicalProcessors);
+
+        if (!RuntimeConfiguration.PathsEqual(applied.DataRoot, proposed.DataRoot) &&
+            dataRootMigrationService.HasContent(applied.DataRoot))
+        {
+            var choice = dialogs.RequestDataRootMigration(applied.DataRoot, proposed.DataRoot);
+            if (choice == DataRootMigrationChoice.Cancel)
+            {
+                RuntimeSettingsStatus = "The managed data root change was not saved.";
+                return;
+            }
+
+            if (choice == DataRootMigrationChoice.MoveExistingData)
+            {
+                var migration = new DataRootMigrationRequest(
+                    Guid.NewGuid(),
+                    applied.DataRoot,
+                    proposed.DataRoot);
+                dataRootMigrationService.ValidateMove(migration);
+                proposed = proposed with { PendingDataRootMigration = migration };
+            }
+        }
+
+        var saved = await runtimeConfigurationService
+            .SaveForNextRestartAsync(proposed, CancellationToken.None).ConfigureAwait(true);
+        ApplyRuntimeConfigurationDraft(saved);
+        IsRestartPending = !RuntimeConfigurationsMatch(saved, applied);
+        RuntimeSettingsDirty = false;
+
+        if (!IsRestartPending)
+        {
+            RestartPendingMessage = string.Empty;
+            RuntimeSettingsStatus = "Runtime and storage settings match the active configuration.";
+            StatusMessage = RuntimeSettingsStatus;
+            return;
+        }
+
+        RestartPendingMessage = "Application restart pending — staged runtime or storage changes are not active yet.";
+        RuntimeSettingsStatus = saved.PendingDataRootMigration is null
+            ? "Changes saved. They will take effect after the application restarts."
+            : "Changes saved. Existing managed data will be moved and verified before workers start on the next application launch.";
+        StatusMessage = RuntimeSettingsStatus;
+        if (dialogs.Confirm(
+            "Restart application now?",
+            "The runtime and storage changes were saved successfully. Restart the application now to apply them?\n\n" +
+            "Local monitoring and downloads will pause while the app restarts. Remote FHIR exports will not be cancelled."))
+        {
+            applicationRestartService.Restart();
+        }
+    }
+
+    private async Task DiscardRuntimeSettingsAsync()
+    {
+        if (IsRestartPending &&
+            !dialogs.Confirm(
+                "Discard staged runtime changes?",
+                "Discard all runtime and storage changes that are waiting for an application restart? The active settings will be retained."))
+        {
+            return;
+        }
+
+        var applied = runtimeConfigurationService.Applied;
+        if (IsRestartPending)
+        {
+            await runtimeConfigurationService
+                .SaveForNextRestartAsync(applied, CancellationToken.None).ConfigureAwait(true);
+        }
+
+        ApplyRuntimeConfigurationDraft(applied);
+        RuntimeSettingsDirty = false;
+        IsRestartPending = false;
+        RestartPendingMessage = string.Empty;
+        RuntimeSettingsStatus = "Unsaved and staged changes were discarded. Active settings are unchanged.";
+        StatusMessage = RuntimeSettingsStatus;
+    }
+
+    private Task RestoreRuntimeDefaultsAsync()
+    {
+        ApplyRuntimeConfigurationDraft(runtimeConfigurationService.DeploymentDefaults);
+        RuntimeSettingChanged();
+        RuntimeSettingsStatus = RuntimeSettingsDirty
+            ? "Deployment defaults loaded into the editor. Select Apply Changes to stage them."
+            : "The active or already-staged settings match the deployment defaults.";
+        return Task.CompletedTask;
+    }
+
+    private Task RestartNowAsync()
+    {
+        if (!IsRestartPending)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (dialogs.Confirm(
+            "Restart application now?",
+            "Restart now to apply the staged runtime and storage settings?\n\n" +
+            "Local monitoring and downloads will pause while the app restarts. Remote FHIR exports will not be cancelled."))
+        {
+            applicationRestartService.Restart();
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private void ApplyRuntimeConfigurationDraft(RuntimeConfiguration configuration)
+    {
+        configuredExportLimit = configuration.MaxConcurrentExports;
+        perSiteDownloadLimit = configuration.PerSiteFileDownloadLimit;
+        minimumFreeDiskSpaceGB = configuration.MinimumFreeDiskSpaceGB;
+        dataRoot = configuration.DataRoot;
+        foreach (var propertyName in new[]
+        {
+            nameof(ConfiguredExportLimit), nameof(EffectiveExportLimit), nameof(PerSiteDownloadLimit),
+            nameof(MinimumFreeDiskSpaceGB), nameof(DataRoot),
+        })
+        {
+            OnPropertyChanged(propertyName);
+        }
+    }
+
+    private void RuntimeSettingChanged()
+    {
+        if (!initialized || disposed)
+        {
+            return;
+        }
+
+        RuntimeSettingsDirty = runtimeConfigurationService.LoadWarning is not null ||
+            !RuntimeDraftMatches(runtimeConfigurationService.Current);
+        RuntimeSettingsStatus = RuntimeSettingsDirty
+            ? "Unsaved changes. Select Apply Changes to stage them for the next application restart."
+            : IsRestartPending
+                ? "Changes are saved and waiting for an application restart."
+                : "Runtime and storage settings are active.";
+    }
+
+    private bool RuntimeDraftMatches(RuntimeConfiguration configuration) =>
+        ConfiguredExportLimit == configuration.MaxConcurrentExports &&
+        PerSiteDownloadLimit == configuration.PerSiteFileDownloadLimit &&
+        MinimumFreeDiskSpaceGB == configuration.MinimumFreeDiskSpaceGB &&
+        string.Equals(DataRoot.Trim(), configuration.DataRoot, OperatingSystem.IsWindows()
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal);
+
+    private static bool RuntimeConfigurationsMatch(RuntimeConfiguration first, RuntimeConfiguration second) =>
+        first.MaxConcurrentExports == second.MaxConcurrentExports &&
+        first.PerSiteFileDownloadLimit == second.PerSiteFileDownloadLimit &&
+        first.MinimumFreeDiskSpaceGB == second.MinimumFreeDiskSpaceGB &&
+        RuntimeConfiguration.PathsEqual(first.DataRoot, second.DataRoot) &&
+        first.PendingDataRootMigration is null;
+
     private void ApplyPreferences(ApplicationPreferences preferences)
     {
         dateDisplayMode = preferences.DateMode;
         autoRefreshEnabled = preferences.AutoRefreshEnabled;
         autoRefreshIntervalSeconds = preferences.AutoRefreshIntervalSeconds;
+        automaticallyResumeDownloads = preferences.AutomaticallyResumeDownloads;
         minimizeToTray = preferences.MinimizeToTray;
         showNetworkAccessHintOnBadRequest = preferences.ShowNetworkAccessHintOnBadRequest;
         DateTimeDisplayPolicy.Mode = dateDisplayMode;
         foreach (var propertyName in new[]
         {
             nameof(SelectedDateDisplayMode), nameof(DateDisplayDescription), nameof(AutoRefreshEnabled),
-            nameof(AutoRefreshIntervalSeconds), nameof(AutoRefreshIntervalText), nameof(MinimizeToTray),
+            nameof(AutoRefreshIntervalSeconds), nameof(AutoRefreshIntervalText), nameof(AutomaticallyResumeDownloads), nameof(MinimizeToTray),
             nameof(ShowNetworkAccessHintOnBadRequest),
         })
         {
@@ -1472,6 +1801,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                 DateMode = dateDisplayMode,
                 AutoRefreshEnabled = autoRefreshEnabled,
                 AutoRefreshIntervalSeconds = autoRefreshIntervalSeconds,
+                AutomaticallyResumeDownloads = automaticallyResumeDownloads,
                 MinimizeToTray = minimizeToTray,
                 ShowNetworkAccessHintOnBadRequest = showNetworkAccessHintOnBadRequest,
             },
@@ -1553,6 +1883,7 @@ public sealed class MainViewModel : ObservableObject, IDisposable
                         DateMode = dateDisplayMode,
                         AutoRefreshEnabled = autoRefreshEnabled,
                         AutoRefreshIntervalSeconds = autoRefreshIntervalSeconds,
+                        AutomaticallyResumeDownloads = automaticallyResumeDownloads,
                         MinimizeToTray = minimizeToTray,
                         ShowNetworkAccessHintOnBadRequest = showNetworkAccessHintOnBadRequest,
                     },

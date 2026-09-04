@@ -341,6 +341,86 @@ public sealed class ExportJobService(
         return await TransitionLoadedAsync(job, target, "LocalProcessingResumed", "Local processing was resumed.", true, cancellationToken).ConfigureAwait(false);
     }
 
+    public async Task<JobActionResult> ResumeRemainingDownloadsAsync(Guid jobId, CancellationToken cancellationToken)
+    {
+        var job = await RequiredJobAsync(jobId, cancellationToken).ConfigureAwait(false);
+        if (job.State != ExportJobState.FailedPermanent || job.ManifestJson is null)
+        {
+            throw new InvalidOperationException("Remaining downloads can be resumed only for a failed job that already has a completion manifest.");
+        }
+
+        var files = await exportStore.GetFilesAsync(job.Id, cancellationToken).ConfigureAwait(false);
+        if (files.Count == 0)
+        {
+            throw new InvalidOperationException("The completion manifest has no persisted file entries to resume.");
+        }
+
+        var remaining = files.Where(file => file.Status != ExportFileStatus.Validated).ToArray();
+        if (remaining.Length == 0)
+        {
+            throw new InvalidOperationException("All manifest files are already validated. This job does not have any remaining downloads.");
+        }
+
+        foreach (var file in remaining.Where(file => file.Status is
+            ExportFileStatus.Failed or
+            ExportFileStatus.Downloading or
+            ExportFileStatus.RetryPending or
+            ExportFileStatus.Paused))
+        {
+            var expectedFileVersion = file.Version;
+            file.ResetForDownloadRetry("Operator requested recovery of the unfinished download set.");
+            await exportStore.UpdateFileAsync(file, expectedFileVersion, cancellationToken).ConfigureAwait(false);
+        }
+
+        var validated = files.Where(file => file.Status == ExportFileStatus.Validated).ToArray();
+        var downloaded = files.Where(file => file.Status is
+            ExportFileStatus.Downloaded or
+            ExportFileStatus.Validating or
+            ExportFileStatus.Validated).ToArray();
+        var totalBytesKnown = files.All(file =>
+            file.ExpectedBytes is not null || file.Status is
+                ExportFileStatus.Downloaded or
+                ExportFileStatus.Validating or
+                ExportFileStatus.Validated);
+        var expectedJobVersion = job.Version;
+        job.RecordFileProgress(
+            downloaded.Length,
+            validated.Length,
+            downloaded.Sum(file => file.ActualBytes),
+            totalBytesKnown ? files.Sum(file => file.ExpectedBytes ?? file.ActualBytes) : 0,
+            validated.Sum(file => file.RecordCount));
+        job.ClearFailure();
+
+        var now = timeProvider.GetUtcNow();
+        var operationId = Guid.NewGuid();
+        var message = $"Queued {remaining.Length:N0} unfinished file(s) for download; {validated.Length:N0} already validated file(s) were retained.";
+        var metadata = JsonSerializer.Serialize(
+            new
+            {
+                remainingFileCount = remaining.Length,
+                retainedValidatedFileCount = validated.Length,
+                kickoffRequestSent = false,
+                statusRequestSent = false,
+            },
+            JsonDefaults.Options);
+        var evt = job.Transition(
+            ExportJobState.QueuedForDownload,
+            now,
+            "RemainingDownloadsResumeRequested",
+            message,
+            operationId,
+            operationId.ToString("N"),
+            metadata);
+        await exportStore.UpdateJobAsync(
+            job,
+            evt,
+            Audit(now, "RemainingDownloadsResumeRequested", job.Id, "Succeeded", evt.CorrelationId),
+            expectedJobVersion,
+            cancellationToken).ConfigureAwait(false);
+        workSignal.Signal();
+        return new JobActionResult(job.Id, job.State, message);
+    }
+
     public async Task<JobActionResult> RequestRemoteCancelAsync(Guid jobId, string typedConfirmation, CancellationToken cancellationToken)
     {
         RequireConfirmation(typedConfirmation, "CANCEL");

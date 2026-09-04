@@ -9,6 +9,7 @@ public static class DependencyInjection
     {
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<ApplicationSettingsService>();
+        services.AddSingleton<RuntimeConfigurationService>();
         services.AddSingleton<PasswordProtectionService>();
         services.AddTransient<ExportJobService>();
         return services;

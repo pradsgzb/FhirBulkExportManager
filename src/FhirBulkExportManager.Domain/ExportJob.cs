@@ -27,7 +27,7 @@ public sealed class ExportJob
             [ExportJobState.Unknown] = [ExportJobState.Running, ExportJobState.WaitingForPoll, ExportJobState.ManifestReady, ExportJobState.CancelRequested, ExportJobState.FailedPermanent, ExportJobState.Expired],
             [ExportJobState.Expired] = [ExportJobState.Archived],
             [ExportJobState.Cancelled] = [ExportJobState.Archived],
-            [ExportJobState.FailedPermanent] = [ExportJobState.Running, ExportJobState.Archived],
+            [ExportJobState.FailedPermanent] = [ExportJobState.Running, ExportJobState.QueuedForDownload, ExportJobState.Archived],
             [ExportJobState.Completed] = [ExportJobState.Archived],
             [ExportJobState.Archived] = [],
         };
@@ -294,6 +294,8 @@ public sealed class ExportJob
     {
         LastErrorCode = null;
         LastErrorMessage = null;
+        RetryCount = 0;
+        NextPollAtUtc = null;
         Version++;
     }
 
